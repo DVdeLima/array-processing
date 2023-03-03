@@ -14,6 +14,7 @@ Includes:
         Fold tensor (fold)
         Tensor-matrix mode product (modeprod)
         Tensor-matrix multimode product (mmprod)
+        Tensor-matrix product (tmprod)
         Generate identity tensor (eyeNR)
         Generate tensor from CPD (cpdgen)
         Generate L-rank identity tensor (eyeNL)
@@ -54,8 +55,7 @@ __all__ = [
     "kr",
     "unfold",
     "fold",
-    "modeprod",
-    "mmprod",
+    "tmprod",
     "eyeNR",
     "cpdgen",
     "eyeNL",
@@ -178,7 +178,7 @@ def kron(F: list) -> np.ndarray:
     kron_shape = np.prod([f.shape for f in F], axis=0)
     a = ord("a")  # 97
     row_list = [chr(m) for m in range(a, a + N)]
-    col_list = [chr(n) for n in range(a + N + 1, a + 2 * N + 1)]
+    col_list = [chr(n) for n in range(a + N, a + 2 * N)]
     alt_list = [r + c for r, c in zip(row_list, col_list)]
     subscripts = ",".join(alt_list) + "->" + "".join(row_list + col_list)
     return np.einsum(subscripts, *F).reshape(kron_shape)
@@ -333,6 +333,52 @@ def mmprod(
     return T
 
 
+def tmprod(
+    T: np.ndarray,
+    M: tp.Union[np.ndarray, list],
+    modes: tp.Union[int, list, None] = None,
+) -> np.ndarray:
+    """
+    Tensor-Matrix product
+
+    Parameters
+    ----------
+    T : NumPy array
+        Input tensor.
+    M : NumPy array or list of NumPy arrays
+        Input matrix or list of matrices.
+    modes : int or list, optional
+        mode or list of modes for tensor-matrix product
+
+    Returns
+    -------
+    NumPy array
+        Tensor-matrix product.
+    """
+    N = T.ndim
+    if modes is None:
+        if isinstance(M, list):
+            modes = np.arange(len(M))
+        else:
+            modes = 0
+    a = ord("a")
+    Tin = [chr(t) for t in range(a, a + N)]
+    Min = [chr(t) for t in range(a + N, a + 2 * N)]
+    subscripts = "".join(Tin) + ","
+    if isinstance(modes, int):
+        Tout = Tin.copy()
+        Tout[modes] = Min[modes]
+        subscripts += Min[modes] + Tin[modes] + "->" + "".join(Tout)
+        return np.einsum(subscripts, T, M)
+    Mall = [Min[m] + Tin[m] for m in modes]
+    Tout = [
+        Min[idx] if test else Tin[idx]
+        for idx, test in enumerate([n in modes for n in range(N)])
+    ]
+    subscripts += ",".join(Mall) + "->" + "".join(Tout)
+    return np.einsum(subscripts, T, *M)
+
+
 def eyeNR(N: int, R: int) -> np.ndarray:
     """
     Generate N-th order, rank R identity tensor.
@@ -381,7 +427,7 @@ def cpdgen(F: tp.Union[list, np.ndarray], opt: bool = False) -> np.ndarray:
     R = F[0].shape[1]
     N = len(F)
     if N > 25:
-        return mmprod(eyeNR(N, R), F)
+        return tmprod(eyeNR(N, R), F)
     a = ord("a")  # 97
     seq_list = [chr(n) for n in np.arange(a, a + N)]
     subscripts = "z,".join(seq_list) + "z->" + "".join(seq_list)
@@ -411,7 +457,7 @@ def eyeNL(N: int, L: list) -> np.ndarray:
     INR = eyeNR(N, R)
     Lmod = [None, *L[:-1], None]
     proto = np.arange(R)
-    slices = [proto[Lmod[i]: Lmod[i + 1]] for i in range(R - 1)]
+    slices = [proto[Lmod[i] : Lmod[i + 1]] for i in range(R - 1)]
     return np.array([INR[:, s].sum(axis=1) for s in slices]).transpose(
         [-1, *np.arange(R - 2, -1, -1)]
     )
@@ -434,7 +480,7 @@ def ll1gen(F: list, L: list) -> np.ndarray:
         Generated tensor.
     """
     N = len(F)
-    return mmprod(eyeNL(N, L), F)
+    return tmprod(eyeNL(N, L), F)
 
 
 def estSNR(X0: np.ndarray, X: np.ndarray) -> np.float64:
@@ -520,7 +566,7 @@ def lra(
             S = estcore(X, U)
         else:
             U, S = stmlsvd(X, size_core)[:2]
-        return mmprod(S, U)
+        return tmprod(S, U)
 
 
 def fba(X: np.ndarray, exp: bool = False) -> np.ndarray:
@@ -545,7 +591,7 @@ def fba(X: np.ndarray, exp: bool = False) -> np.ndarray:
         return np.hstack((X, np.rot90(X.conj(), 2)))
     else:
         PI = [np.fliplr(np.eye(s)) for s in X.shape]
-        return np.concatenate((X, mmprod(X.conj(), PI)), X.ndim - 1)
+        return np.concatenate((X, tmprod(X.conj(), PI)), X.ndim - 1)
 
 
 def qunit(M: int) -> np.ndarray:
@@ -567,11 +613,15 @@ def qunit(M: int) -> np.ndarray:
     Im = np.eye(m)
     PIm = np.fliplr(Im)
 
-    Q = np.vstack((np.hstack((Im, np.zeros((m, n)), 1j * Im)),
-                   np.hstack((np.zeros((n, m)),
-                              np.sqrt(2) * np.ones((n, n)), np.zeros((n, m)))),
-                   np.hstack((PIm, np.zeros((m, n)),
-                              -1j * PIm)),)) / np.sqrt(2)
+    Q = np.vstack(
+        (
+            np.hstack((Im, np.zeros((m, n)), 1j * Im)),
+            np.hstack(
+                (np.zeros((n, m)), np.sqrt(2) * np.ones((n, n)), np.zeros((n, m)))
+            ),
+            np.hstack((PIm, np.zeros((m, n)), -1j * PIm)),
+        )
+    ) / np.sqrt(2)
     return Q
 
 
@@ -593,7 +643,7 @@ def unitransf(X: np.ndarray) -> tp.Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Z = fba(X)
     QH = [qunit(m).conj().T for m in Z.shape]
-    phiZ = mmprod(Z, QH)
+    phiZ = tmprod(Z, QH)
     resZ = np.imag(phiZ)
     phiZ = np.real(phiZ)
 
@@ -619,7 +669,7 @@ def cheapUT(X: np.ndarray) -> np.ndarray:
         Y = qunit(X.shape[0]).conj().T @ X
     else:
         QH = [qunit(m).conj().T for m in X.shape[:-1]]
-        Y = mmprod(X, QH, modes=np.arange(R))
+        Y = tmprod(X, QH, modes=np.arange(R))
     return np.concatenate((Y.real, Y.imag), R)
 
 
@@ -656,14 +706,18 @@ def sps(X: np.ndarray, L: int = 2, expanded: bool = False) -> np.ndarray:
 
     Msel = M - L + 1
 
-    J = [[np.hstack((np.zeros((m, n)), np.eye(m), np.zeros((m, L - (n + 1)))))
-          for m in Msel]
-         for n in range(L)]
+    J = [
+        [
+            np.hstack((np.zeros((m, n)), np.eye(m), np.zeros((m, L - (n + 1)))))
+            for m in Msel
+        ]
+        for n in range(L)
+    ]
 
     if expanded:
-        Y = np.stack(([mmprod(X, j) for j in J]), R + 1)
+        Y = np.stack(([tmprod(X, j) for j in J]), R + 1)
     else:
-        Y = np.concatenate(([mmprod(X, j) for j in J]), R)
+        Y = np.concatenate(([tmprod(X, j) for j in J]), R)
     return Y
 
 
@@ -783,18 +837,22 @@ def ste(X: np.ndarray, D: int, **varargin: bool) -> list:
     J_1 = [np.hstack((np.zeros((m, 1)), np.eye(m))) for m in Msel]
 
     I_left = [np.eye(np.prod(M[:r]).astype(int)) for r in range(R)]
-    I_right = [np.eye(np.prod(M[r + 1: R]).astype(int)) for r in range(R)]
+    I_right = [np.eye(np.prod(M[r + 1 : R]).astype(int)) for r in range(R)]
 
-    J_0 = [kron([i_left, j_0, i_right])
-           for i_left, j_0, i_right in zip(I_left, J_0, I_right)]
-    J_1 = [kron([i_left, j_1, i_right])
-           for i_left, j_1, i_right in zip(I_left, J_1, I_right)]
+    J_0 = [
+        kron([i_left, j_0, i_right])
+        for i_left, j_0, i_right in zip(I_left, J_0, I_right)
+    ]
+    J_1 = [
+        kron([i_left, j_1, i_right])
+        for i_left, j_1, i_right in zip(I_left, J_1, I_right)
+    ]
 
     # subspace estimation
     if not trunc:
         perm = np.argsort(X.shape)
         U, S = stmlsvd(X, P, perm, FullSVD=usefull)[:2]
-        ISSE = unfold(mmprod(S, U[:R]), R).T
+        ISSE = unfold(tmprod(S, U[:R]), R).T
     else:
         if not usefull:
             Us, Sigmas = svds(
@@ -888,21 +946,21 @@ def ute(X: np.ndarray, D: int, **varargin: bool) -> list:
     # selection matrix
     Msel = M - 1
 
-    K = [qunit(m).conj().T @ np.hstack((np.zeros((m, 1)),
-                                        np.eye(m))) @ qunit(m + 1)
-         for m in Msel]
+    K = [
+        qunit(m).conj().T @ np.hstack((np.zeros((m, 1)), np.eye(m))) @ qunit(m + 1)
+        for m in Msel
+    ]
 
     I_left = [np.eye(np.prod(M[:r]).astype(int)) for r in range(R)]
-    I_right = [np.eye(np.prod(M[r + 1: R]).astype(int)) for r in range(R)]
+    I_right = [np.eye(np.prod(M[r + 1 : R]).astype(int)) for r in range(R)]
 
-    K = [kron([i_left, k, i_right])
-         for i_left, k, i_right in zip(I_left, K, I_right)]
+    K = [kron([i_left, k, i_right]) for i_left, k, i_right in zip(I_left, K, I_right)]
 
     # subspace estimation
     if not trunc:
         perm = np.argsort(X.shape)
         U, S = stmlsvd(X, P, perm, FullSVD=usefull)[:2]
-        ISSE = unfold(mmprod(S, U[:R]), R).T
+        ISSE = unfold(tmprod(S, U[:R]), R).T
     else:
         if not usefull:
             Us, Sigmas = svds(
@@ -958,8 +1016,7 @@ def utepair(Psi: list) -> list:
     return [np.diag(phi) for phi in Phi]
 
 
-def sfcheck(mu: tp.Union[list, np.ndarray],
-            mu_hat: tp.Union[list, np.ndarray]) -> list:
+def sfcheck(mu: tp.Union[list, np.ndarray], mu_hat: tp.Union[list, np.ndarray]) -> list:
     """
     Spatial frequencies check.
 
@@ -1058,9 +1115,7 @@ def stmlsvd(
     else:
         for p in perm:
             if fast:
-                U[p], sv[p] = svds(unfold(S, p),
-                                   k=size_core[p],
-                                   solver="lobpcg")[:2]
+                U[p], sv[p] = svds(unfold(S, p), k=size_core[p], solver="lobpcg")[:2]
             else:
                 U[p], sv[p] = la.svd(
                     unfold(S, p), full_matrices=usefull, lapack_driver="gesvd"
@@ -1072,9 +1127,7 @@ def stmlsvd(
 
 
 def tmlsvd(
-    T: np.ndarray,
-    size_core: tp.Union[None, list, np.ndarray] = None,
-    **varargin: bool
+    T: np.ndarray, size_core: tp.Union[None, list, np.ndarray] = None, **varargin: bool
 ) -> tuple:
     """
     Truncated multilinear SVD.
@@ -1118,9 +1171,9 @@ def tmlsvd(
         if usefull:
             U, sv = zip(
                 *[
-                    la.svd(unfold(T, n),
-                           full_matrices=usefull,
-                           lapack_driver="gesvd")[:2]
+                    la.svd(unfold(T, n), full_matrices=usefull, lapack_driver="gesvd")[
+                        :2
+                    ]
                     for n in range(N)
                 ]
             )
@@ -1136,8 +1189,7 @@ def tmlsvd(
     return (U, sv)
 
 
-def estcore(T: np.ndarray,
-            U: list, perm: tp.Union[None, list] = None) -> np.ndarray:
+def estcore(T: np.ndarray, U: list, perm: tp.Union[None, list] = None) -> np.ndarray:
     """
     Core tensor estimation.
 
@@ -1156,11 +1208,11 @@ def estcore(T: np.ndarray,
         Core tensor.
     """
     if perm is None:
-        S = mmprod(T, [u.conj().T for u in U])
+        S = tmprod(T, [u.conj().T for u in U])
     else:
         if type(U) is not np.ndarray:
             U = np.array(U)
-        S = mmprod(T, [u.conj().T for u in U[perm]], perm)
+        S = tmprod(T, [u.conj().T for u in U[perm]], perm)
     return S
 
 
@@ -1194,10 +1246,7 @@ def ampcpd(Y: np.ndarray, F: list, normcols: bool = False) -> np.ndarray:
     return np.array([(Y.ravel() / g.ravel()).sum() for g in G])
 
 
-def cpdgevd(T: np.ndarray,
-            R: int,
-            normcols: bool = False,
-            fast: bool = False) -> list:
+def cpdgevd(T: np.ndarray, R: int, normcols: bool = False, fast: bool = False) -> list:
     """
     Canonical Polyadic Decomposition via GEVD (CPD-GEVD).
 
@@ -1228,8 +1277,7 @@ def cpdgevd(T: np.ndarray,
 
     if normcols:  # normalize columns
         F_col_norm = [np.sqrt((f * f.conj()).sum(0)) for f in F]
-        F = [f @ np.diag(1 / f_col_norm)
-             for f, f_col_norm in zip(F, F_col_norm)]
+        F = [f @ np.diag(1 / f_col_norm) for f, f_col_norm in zip(F, F_col_norm)]
         allcolnorm = np.vstack(F_col_norm).prod(0) ** (1 / 3)
         F = [f @ np.diag(allcolnorm) for f in F]
     return F
@@ -1268,15 +1316,14 @@ def cpdgevd2(
     L, R = la.eig(S[:, :, 0], S[:, :, 1], left=True)[1:3]
 
     T = [None] * 3
-    T[2] = np.einsum("ijk->kj", mmprod(S, [L.T.conj(), R.T]))
+    T[2] = np.einsum("ijk->kj", tmprod(S, [L.T.conj(), R.T]))
     if thirdonly:
         return U[2] @ T[2]
     T[:2] = [la.inv(lr) for lr in (L.T.conj(), R.T)]
     F = [u @ t for u, t in zip(U, T)]
     if normcols:  # normalize columns
         F_col_norm = [np.sqrt((f * f.conj()).sum(0)) for f in F]
-        F = [f @ np.diag(1 / f_col_norm)
-             for f, f_col_norm in zip(F, F_col_norm)]
+        F = [f @ np.diag(1 / f_col_norm) for f, f_col_norm in zip(F, F_col_norm)]
         allcolnorm = np.vstack(F_col_norm).prod(0) ** (1 / 3)
         F = [f @ np.diag(allcolnorm) for f in F]
     return F
@@ -1309,7 +1356,7 @@ def cpdsevd(
     S_v = np.vstack((S_0, S[:, :, 1]))
     U_v = la.svd(S_v, full_matrices=False)[0]
     U_1 = U_v[:R, :]
-    U_2 = U_v[R: (2 * R), :]
+    U_2 = U_v[R : (2 * R), :]
 
     R_1 = U_1.conj().T @ U_1
     R_2 = U_1.conj().T @ U_2
@@ -1325,8 +1372,7 @@ def cpdsevd(
     F = [U[n] @ T[n] for n in range(len(U))]
     if normcols:  # normalize columns
         F_col_norm = [np.sqrt((f * f.conj()).sum(0)) for f in F]
-        F = [f @ np.diag(1 / f_col_norm)
-             for f, f_col_norm in zip(F, F_col_norm)]
+        F = [f @ np.diag(1 / f_col_norm) for f, f_col_norm in zip(F, F_col_norm)]
         allcolnorm = np.vstack(F_col_norm).prod(0) ** (1 / 3)
         F = [f @ np.diag(allcolnorm) for f in F]
     return F
