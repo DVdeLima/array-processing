@@ -12,8 +12,6 @@ Includes:
         Khatri-Rao product (kr)
         Unfold tensor (unfold)
         Fold tensor (fold)
-        Tensor-matrix mode product (modeprod)
-        Tensor-matrix multimode product (mmprod)
         Tensor-matrix product (tmprod)
         Generate identity tensor (eyeNR)
         Generate tensor from CPD (cpdgen)
@@ -100,7 +98,6 @@ from itertools import permutations
 # import pdb as ipdb
 # ipdb.set_trace()
 
-
 # %% Basic operations
 
 
@@ -133,21 +130,21 @@ def colnorm(X: np.ndarray) -> np.ndarray:
     Parameters
     ----------
     X : NumPy array
-        Input matrix or tensor.
+        Input matrix.
 
     Returns
     -------
     NumPy array
-        Input matrix or tensor with normalized "columns".
+        Input matrix with normalized columns.
     """
     N = X.ndim
     if N == 1:
         return X / la.norm(X)
     elif N == 2:
         return X @ np.diag(1 / la.norm(X, axis=0))
-    else:
+    else:  # normalization of fibers in last mode, undocumented
         D = np.diag(1 / np.array(frob(X, N - 1)))
-        return modeprod(X, D, N - 1)
+        return tmprod(X, D, N - 1)
 
 
 def kron(F: list) -> np.ndarray:
@@ -217,7 +214,9 @@ def kr(F: list) -> np.ndarray:
     return np.einsum(subscripts, *F).reshape(kr_shape)
 
 
-def unfold(T: np.ndarray, mode: int = 0):
+def unfold(T: np.ndarray,
+           modes_left: tp.Union[int, list] = 0,
+           modes_right: tp.Union[list, None] = None):
     """
     Returns mode-unfolding of tensor.
 
@@ -225,7 +224,7 @@ def unfold(T: np.ndarray, mode: int = 0):
     ----------
     T : NumPy array
         Tensor.
-    mode : int, optional
+    mode : int, list, optional
         Unfolding mode. The default is 0 (first mode).
 
     Returns
@@ -233,16 +232,34 @@ def unfold(T: np.ndarray, mode: int = 0):
     NumPy array
         mode-unfolded tensor.
     """
-    size_tensor = list(T.shape)
-    size_matrix = [size_tensor.pop(mode), np.array(size_tensor).prod()]
-    if mode:
+    modes_left_is_int = isinstance(modes_left, (int, np.int32))
+    modes_right_is_none = modes_right is None
+    if modes_left_is_int and modes_right_is_none:
+        tensor_shape = list(T.shape)
+        matrix_shape = [tensor_shape.pop(modes_left), np.array(tensor_shape).prod()]
+        if modes_left:
+            N = T.ndim
+            axis_order = list(range(N))
+            axis_order = [axis_order.pop(modes_left), *axis_order]
+            T = np.einsum(T, range(N), axis_order)
+        return np.reshape(T, matrix_shape)
+    else:  # arbitrary unfolding, undocumented
         N = T.ndim
-        axis_order = np.insert(np.arange(1, N), mode, 0)
-        T = np.moveaxis(T, np.arange(N), axis_order)
-    return np.reshape(T, size_matrix)
+        if modes_left_is_int:
+            modes_left = [modes_left]
+        if modes_right_is_none:
+            modes_right = [n for n in range(N) if n not in modes_left]
+        elif isinstance(modes_right, int):
+            modes_right = [modes_right]
+        tensor_shape = list(T.shape)
+        matrix_shape = [np.prod([tensor_shape[m] for m in modes_left]),
+                        np.prod([tensor_shape[m] for m in modes_right])]
+        return np.einsum(T, range(N), modes_left + modes_right).reshape(matrix_shape)
 
 
-def fold(M: np.ndarray, mode: int, sizes: list) -> np.ndarray:
+def fold(M: np.ndarray,
+         modes: tp.Union[int, list],
+         tensor_shape: list) -> np.ndarray:
     """
     Fold unfolded tensor back into tensor.
 
@@ -252,85 +269,36 @@ def fold(M: np.ndarray, mode: int, sizes: list) -> np.ndarray:
         Unfolded tensor (matrix).
     mode : int
         Mode (from unfolding).
-    sizes : list
-        Tensor dimension sizes.
+    shape : list
+        Tensor shape (size of each dimension).
 
     Returns
     -------
     NumPy array.
         Tensor
     """
-    N = len(sizes)
-    if mode:
-        axis_order = list(range(N))
-    else:
-        return np.reshape(M, sizes)
-    axis_order = [axis_order.pop(mode)] + axis_order
-    moved_sizes = [sizes[a] for a in axis_order]
-    return np.moveaxis(np.reshape(M, moved_sizes), np.arange(N), axis_order)
-
-
-def modeprod(
-    T: np.ndarray, M: np.ndarray, mode: int = 0, transpose: bool = False
-) -> np.ndarray:
-    """
-    Tensor-matrix (single) mode product.
-
-    Parameters
-    ----------
-    T : NumPy array
-        Input tensor.
-    M : NumPy array
-        Input matrix.
-    mode : int, optional
-        Product mode. The default is 0.
-    transpose : bool, optional
-        Transpose input matrix. The default is False.
-
-    Returns
-    -------
-    NumPy array.
-        Tensor-matrix product.
-    """
-    size = np.array(T.shape)
-    if transpose:
-        M = M.T
-    size[mode] = M.shape[0]
-    return fold(M @ unfold(T, mode), mode, size)
-
-
-def mmprod(
-    T: np.ndarray,
-    M: list,
-    modes: tp.Union[list, None] = None,
-    transpose: tp.Union[list, None] = None,
-) -> np.ndarray:
-    """
-    Tensor-matrix multi-mode product.
-
-    Parameters
-    ----------
-    T : NumPy array
-        Input tensor.
-    M : list
-        List of input matrices.
-    modes : list of ints, optional
-        Modes. If not specified will default to ascending order.
-    transpose : list of bools, optional
-        Transpose input matrices. Defaults to False.
-
-    Returns
-    -------
-    T : NumPy array
-        Tensor-matrices product.
-    """
-    if not modes:
-        modes = np.arange(len(M))
-    if np.any(transpose):
-        M = [m.T if t else m for m, t in zip(M, transpose)]
-    for m, mode in zip(M, modes):
-        T = modeprod(T, m, mode)
-    return T
+    N = len(tensor_shape)
+    if isinstance(modes, int):
+        if modes:
+            axis_order = list(range(N))
+        else:
+            return np.reshape(M, tensor_shape)
+        axis_order = [axis_order.pop(modes)] + axis_order
+        moved_shape = [tensor_shape[ax] for ax in axis_order]
+        return np.einsum(np.reshape(M, moved_shape), axis_order, range(N))
+    else:  # arbitrary mode folding, undocumented
+        all_modes = range(N)
+        if np.all([isinstance(m, int) for m in modes]):
+            modes_left = modes
+            modes_right = [n for n in all_modes if n not in modes_left]
+        else:
+            intput = [isinstance(m, int) for m in modes]  # int input
+            if np.any(intput):
+                modes_left, modes_right = [[m] if iu else m
+                                           for m, iu in zip(modes, intput)]
+        axis_order = modes_left + modes_right
+        moved_shape = [tensor_shape[ax] for ax in axis_order]
+        return np.einsum(M.reshape(moved_shape), axis_order, all_modes)
 
 
 def tmprod(
@@ -363,18 +331,16 @@ def tmprod(
             modes = 0
     a = ord("a")
     Tin = [chr(t) for t in range(a, a + N)]
-    Min = [chr(t) for t in range(a + N, a + 2 * N)]
     subscripts = "".join(Tin) + ","
+    Min = [chr(t) for t in range(a + N, a + 2 * N)]
     if isinstance(modes, int):
-        Tout = Tin.copy()
-        Tout[modes] = Min[modes]
+        Tout = [Tin[n] if n != modes else Min[n]
+                for n in range(N)]
         subscripts += Min[modes] + Tin[modes] + "->" + "".join(Tout)
         return np.einsum(subscripts, T, M)
+    Tout = [Tin[n] if n not in modes else Min[n]
+            for n in range(N)]
     Mall = [Min[m] + Tin[m] for m in modes]
-    Tout = [
-        Min[idx] if test else Tin[idx]
-        for idx, test in enumerate([n in modes for n in range(N)])
-    ]
     subscripts += ",".join(Mall) + "->" + "".join(Tout)
     return np.einsum(subscripts, T, *M)
 
@@ -457,7 +423,7 @@ def eyeNL(N: int, L: list) -> np.ndarray:
     INR = eyeNR(N, R)
     Lmod = [None, *L[:-1], None]
     proto = np.arange(R)
-    slices = [proto[Lmod[i] : Lmod[i + 1]] for i in range(R - 1)]
+    slices = [proto[Lmod[i]: Lmod[i + 1]] for i in range(R - 1)]
     return np.array([INR[:, s].sum(axis=1) for s in slices]).transpose(
         [-1, *np.arange(R - 2, -1, -1)]
     )
@@ -518,10 +484,10 @@ def noisy(T: np.ndarray, SNR: float = 0.0) -> np.ndarray:
     NumPy array
         Noisy tensor.
     """
-    size_tens = T.shape
-    N = np.random.randn(*size_tens)
+    tensor_shape = T.shape
+    N = np.random.randn(*tensor_shape)
     if np.iscomplex(T).any():
-        N = N + 1j * np.random.randn(*size_tens)
+        N = N + 1j * np.random.randn(*tensor_shape)
     scale = la.norm(T) * (10 ** (-SNR / 20)) / la.norm(N)
     N *= scale
     T = T + N
@@ -1049,8 +1015,8 @@ def sfcheck(mu: tp.Union[list, np.ndarray], mu_hat: tp.Union[list, np.ndarray]) 
 
 def stmlsvd(
     T: np.ndarray,
-    size_core: tp.Union[None, int, list] = None,
-    perm: tp.Union[None, list, np.ndarray] = None,
+    size_core: tp.Union[int, list, None] = None,
+    perm: tp.Union[list, np.ndarray, None] = None,
     **varargin: bool,
 ) -> tuple:
     """
@@ -1075,22 +1041,16 @@ def stmlsvd(
         Singular vector matrices, tensor core, singular values vector.
 
     """
-    """Sequentially Truncated Multilinear SVD
-
-    Usage:
-        U, S, sv = stmlsvd(T)
-        U, S, sv = stmlsvd(T, size_core)"""
-
-    size_tens = list(T.shape)
+    tensor_shape = list(T.shape)
     N = T.ndim
 
     if size_core is None:
-        size_core = size_tens
+        size_core = tensor_shape
     if isinstance(size_core, int):
         size_core = [size_core] * N
 
     if perm is None:
-        perm = np.arange(N)
+        perm = range(N)
 
     large = bool(varargin.get("LargeScale"))
     usefull = bool(varargin.get("FullSVD"))
@@ -1111,18 +1071,18 @@ def stmlsvd(
             else:
                 ev, U[p] = la.eigs(SHS, size_core[p])
                 sv[p] = np.sqrt(abs(ev))
-            S = modeprod(S, U[p].conj().T, p)
+            S = tmprod(S, U[p].conj().T, p)
     else:
         for p in perm:
             if fast:
                 U[p], sv[p] = svds(unfold(S, p), k=size_core[p], solver="lobpcg")[:2]
             else:
-                U[p], sv[p] = la.svd(
-                    unfold(S, p), full_matrices=usefull, lapack_driver="gesvd"
-                )[:2]
+                U[p], sv[p] = la.svd(unfold(S, p),
+                                     full_matrices=usefull,
+                                     lapack_driver="gesvd")[:2]
                 U[p] = U[p][:, : size_core[p]]
                 sv[p] = sv[p][: size_core[p]]
-            S = modeprod(S, U[p].conj().T, p)
+            S = tmprod(S, U[p].conj().T, p)
     return (U, S, sv)
 
 
@@ -1148,11 +1108,11 @@ def tmlsvd(
         Singular vector matrices, singular values
 
     """
-    size_tens = list(T.shape)
+    tensor_shape = list(T.shape)
     N = T.ndim
 
     if size_core is None:
-        size_core = size_tens
+        size_core = tensor_shape
 
     large = bool(varargin.get("LargeScale"))
     usefull = bool(varargin.get("FullSVD"))
