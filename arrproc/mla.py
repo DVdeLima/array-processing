@@ -101,7 +101,9 @@ from itertools import permutations
 # %% Basic operations
 
 
-def frob(X: np.ndarray, axis: tp.Union[int, None] = None) -> float:
+def frob(X: np.ndarray,
+         squared: bool = False,
+         axis: tp.Union[int, None] = None) -> float:
     """
     Frobenius norm.
 
@@ -109,8 +111,10 @@ def frob(X: np.ndarray, axis: tp.Union[int, None] = None) -> float:
     ----------
     X : NumPy array
         Vector or matrix or tensor.
-    axis : int, optional
-        Axis along which the norm is calculated.
+    squared : bool, optional
+        Return squared Frobenius norm. The default is False.
+    axis : tp.Union[int, None], optional
+        Axis along which the norm is calculated. The default is None.
 
     Returns
     -------
@@ -119,8 +123,11 @@ def frob(X: np.ndarray, axis: tp.Union[int, None] = None) -> float:
 
     """
     if isinstance(axis, int):
-        return [frob(x) for x in unfold(X, axis)]
-    return np.sqrt((X * X.conj()).real.sum())
+        return [frob(x, squared) for x in unfold(X, axis)]
+    frob2 = (X * X.conj()).real.sum()
+    if squared:
+        return frob2
+    return np.sqrt(frob2)
 
 
 def colnorm(X: np.ndarray) -> np.ndarray:
@@ -130,26 +137,78 @@ def colnorm(X: np.ndarray) -> np.ndarray:
     Parameters
     ----------
     X : NumPy array
-        Input matrix.
+        Input matrix or tensor. In the case of
+        a tensor, normalization occurs along the
+        fibers of the last mode of the tensor.
 
     Returns
     -------
     NumPy array
         Input matrix with normalized columns.
+        The squared Frobenius norm is (approx)
+        the order of the tensor.
     """
     N = X.ndim
     if N == 1:
-        return X / la.norm(X)
+        return X / frob(X)
     elif N == 2:
-        return X @ np.diag(1 / la.norm(X, axis=0))
-    else:  # normalization of fibers in last mode, undocumented
-        D = np.diag(1 / np.array(frob(X, N - 1)))
+        return X @ np.diag(1 / np.array(frob(X, axis=1)))
+    else:
+        D = np.diag(1 / np.array(frob(X, axis=(N - 1))))
         return tmprod(X, D, N - 1)
+
+
+def oprod(F: list) -> np.ndarray:
+    """
+    Outer product.
+
+    Parameters
+    ----------
+    F : list
+        List of vectors or matrices or tensors.
+
+    Returns
+    -------
+    TYPE
+        DESCRIPTION.
+
+    """
+    Ndiff = [f.ndim for f in F]
+    Nacc = [0] + [sum(Ndiff[:n]) for n in range(1, len(F) + 1)]
+    modes = list(range(Nacc[-1]))
+    modes = [modes[Nacc[m]: Nacc[m+1]] for m in range(len(F))]
+    operands = [comb for pair in zip(F, modes) for comb in pair]
+    return np.einsum(*operands, range(sum(Ndiff)))
 
 
 def kron(F: list) -> np.ndarray:
     """
-    Kronecker product
+    Kronecker product.
+
+    Parameters
+    ----------
+    F : list
+        List of factor matrices.
+
+    Returns
+    -------
+    NumPy array
+        Kronecker product.
+
+    """
+    N = len(F)
+    F = [np.matrix(f).T if f.ndim == 1 else f for f in F]
+    kron_shape = np.prod([f.shape for f in F], axis=0)
+    modes = [[m, n] for m, n in zip(range(N), range(N, 2*N))]
+    operands = [comb for pair in zip(F, modes) for comb in pair]
+    if kron_shape[1] == 1:
+        return np.einsum(*operands, range(2*N)).ravel()
+    return np.einsum(*operands, range(2*N)).reshape(kron_shape)
+
+
+def kr(F: list) -> np.ndarray:
+    """
+    Khatri-Rao product.
 
     Parameters
     ----------
@@ -159,59 +218,27 @@ def kron(F: list) -> np.ndarray:
     Raises
     ------
     Exception
-        Number of factor matrices > 13.
-
-    Returns
-    -------
-    NumPy array
-        Kronecker product.
-    """
-    N = len(F)
-    if N > 13:
-        raise Exception("Too many factor matrices!")
-    findvec = [f.ndim == 1 for f in F]
-    if np.any(findvec):
-        F = [np.matrix(f).T if vec else f for f, vec in zip(F, findvec)]
-    kron_shape = np.prod([f.shape for f in F], axis=0)
-    a = ord("a")  # 97
-    row_list = [chr(m) for m in range(a, a + N)]
-    col_list = [chr(n) for n in range(a + N, a + 2 * N)]
-    alt_list = [r + c for r, c in zip(row_list, col_list)]
-    subscripts = ",".join(alt_list) + "->" + "".join(row_list + col_list)
-    return np.einsum(subscripts, *F).reshape(kron_shape)
-
-
-def kr(F: list) -> np.ndarray:
-    """
-    Khatri-Rao product
-
-    Parameters
-    ----------
-    F : list
-        List of factor matrices (same no. of columns).
-
-    Raises
-    ------
-    Exception
-        Number of factor matrices > 25.
+        If number of columns isn't the same for all matrices.
 
     Returns
     -------
     NumPy array
         Khatri-Rao product.
+
     """
     N = len(F)
-    if N > 25:
-        raise Exception("Too many factor matrices!")
+    if np.all([f.ndim == 1 for f in F]):
+        modes = [[n] for n in range(N)]
+        operands = [comb for pair in zip(F, modes) for comb in pair]
+        return np.einsum(*operands).ravel()
     rows, cols = zip(*[f.shape for f in F])
     if not np.all([c == cols[0] for c in cols]):
         error_msg = "All factor matrice must have the same number of columns!"
         raise Exception(error_msg)
     kr_shape = [np.prod(rows), cols[0]]
-    a = ord("a")  # 97
-    row_list = [chr(m) for m in range(a, a + N)]
-    subscripts = "z,".join(row_list) + "z->" + "".join(row_list) + "z"
-    return np.einsum(subscripts, *F).reshape(kr_shape)
+    modes = [[n, N] for n in range(N)]
+    operands = [comb for pair in zip(F, modes) for comb in pair]
+    return np.einsum(*operands, range(N+1)).reshape(kr_shape)
 
 
 def unfold(T: np.ndarray,
@@ -236,7 +263,8 @@ def unfold(T: np.ndarray,
     modes_right_is_none = modes_right is None
     if modes_left_is_int and modes_right_is_none:
         tensor_shape = list(T.shape)
-        matrix_shape = [tensor_shape.pop(modes_left), np.array(tensor_shape).prod()]
+        matrix_shape = [tensor_shape.pop(modes_left),
+                        np.array(tensor_shape).prod()]
         if modes_left:
             N = T.ndim
             axis_order = list(range(N))
@@ -254,7 +282,8 @@ def unfold(T: np.ndarray,
         tensor_shape = list(T.shape)
         matrix_shape = [np.prod([tensor_shape[m] for m in modes_left]),
                         np.prod([tensor_shape[m] for m in modes_right])]
-        return np.einsum(T, range(N), modes_left + modes_right).reshape(matrix_shape)
+        return np.einsum(T, range(N),
+                         modes_left + modes_right).reshape(matrix_shape)
 
 
 def fold(M: np.ndarray,
@@ -291,58 +320,52 @@ def fold(M: np.ndarray,
         if np.all([isinstance(m, int) for m in modes]):
             modes_left = modes
             modes_right = [n for n in all_modes if n not in modes_left]
-        else:
-            intput = [isinstance(m, int) for m in modes]  # int input
-            if np.any(intput):
-                modes_left, modes_right = [[m] if iu else m
-                                           for m, iu in zip(modes, intput)]
+        elif np.any(intput := [isinstance(m, int) for m in modes]):
+            modes_left, modes_right = [[m] if iu else m
+                                       for m, iu in zip(modes, intput)]
         axis_order = modes_left + modes_right
         moved_shape = [tensor_shape[ax] for ax in axis_order]
         return np.einsum(M.reshape(moved_shape), axis_order, all_modes)
 
 
-def tmprod(
-    T: np.ndarray,
-    M: tp.Union[np.ndarray, list],
-    modes: tp.Union[int, list, None] = None,
-) -> np.ndarray:
+def tmprod(T: np.ndarray,
+           M: tp.Union[np.ndarray, list],
+           modes: tp.Union[int, list, None] = None) -> np.ndarray:
     """
-    Tensor-Matrix product
+    Tensor-matrix product
 
     Parameters
     ----------
     T : NumPy array
         Input tensor.
     M : NumPy array or list of NumPy arrays
-        Input matrix or list of matrices.
-    modes : int or list, optional
-        mode or list of modes for tensor-matrix product
+        Input matrices.
+    modes : int or list of ints, optional
+        Modes. The default is None.
 
     Returns
     -------
     NumPy array
         Tensor-matrix product.
+
     """
     N = T.ndim
     if modes is None:
         if isinstance(M, list):
-            modes = np.arange(len(M))
+            modes = range(len(M))
         else:
             modes = 0
-    a = ord("a")
-    Tin = [chr(t) for t in range(a, a + N)]
-    subscripts = "".join(Tin) + ","
-    Min = [chr(t) for t in range(a + N, a + 2 * N)]
+    if isinstance(M, np.ndarray):
+        M = [M]
     if isinstance(modes, int):
-        Tout = [Tin[n] if n != modes else Min[n]
-                for n in range(N)]
-        subscripts += Min[modes] + Tin[modes] + "->" + "".join(Tout)
-        return np.einsum(subscripts, T, M)
-    Tout = [Tin[n] if n not in modes else Min[n]
-            for n in range(N)]
-    Mall = [Min[m] + Tin[m] for m in modes]
-    subscripts += ",".join(Mall) + "->" + "".join(Tout)
-    return np.einsum(subscripts, T, *M)
+        modes = [modes]
+    no_modes = len(modes)
+    new_shapes = range(N, N + no_modes)
+    modict = {m: n for (m, n) in zip(modes, new_shapes)}
+    output = [n if n not in modes else modict.get(n) for n in range(N)]
+    modes = [[n, m] for m, n in zip(modes, range(N, N + no_modes))]
+    operands = [comb for pair in zip(M, modes) for comb in pair]
+    return np.einsum(T, range(N), *operands, output)
 
 
 def eyeNR(N: int, R: int) -> np.ndarray:
@@ -368,68 +391,57 @@ def eyeNR(N: int, R: int) -> np.ndarray:
     return eye
 
 
-def cpdgen(F: tp.Union[list, np.ndarray], opt: bool = False) -> np.ndarray:
+def cpdgen(F: list, opt: bool = False) -> np.ndarray:
     """
-    Generate a tensor from list of factor matrices F.
+    Generate tensor from list of factor matrices F.
 
     Parameters
     ----------
-    F : list or NumPy array (of NumPy arrays)
-        Factor matrices.
-    opt : boolean, optional
-        Attempt optimization, defaults to False
-        (*possible* gain in speed at the cost of
-        greater memory usage and slight loss of
-        precision. Only works for N < 26. If your
-        tensor has more than 25 dimensions this
-        optimization is likely the least of
-        your problems, though)
+    F : list
+        DESCRIPTION.
+    opt : bool, optional
+        Attempt path optimization. The default is False.
+        *Possible* gain in speed at the cost of greater
+        memory usage and slight loss of precision.
 
     Returns
     -------
     NumPy array
-        Generated tensor.
+        Generator tensor.
+
     """
-    R = F[0].shape[1]
     N = len(F)
-    if N > 25:
-        return tmprod(eyeNR(N, R), F)
-    a = ord("a")  # 97
-    seq_list = [chr(n) for n in np.arange(a, a + N)]
-    subscripts = "z,".join(seq_list) + "z->" + "".join(seq_list)
-    if opt:
-        opt_path = np.einsum_path(subscripts, *F)[0]
-        return np.einsum(subscripts, *F, optimize=opt_path)
-    return np.einsum(subscripts, *F)
+    modes = [[n, N] for n in range(N)]
+    operands = operands = [comb for pair in zip(F, modes) for comb in pair]
+    return np.einsum(*operands, range(N))
 
 
 def eyeNL(N: int, L: list) -> np.ndarray:
     """
-    Generate N-th order, rank-(L, L, 1) compressed identity tensor.
+    Generate N-th order, rank-(L_1, ..., L_P) compressed identity tensor.
 
     Parameters
     ----------
     N : int
         Order.
-    L : list
-        Ranks.
+    L : list of ranks
+        list of rank of each factor matrix.
 
     Returns
     -------
     NumPy array
         Compressed 'identity' tensor.
     """
-    R = np.sum(L)
+    P = len(L)
+    R = sum(L)
     INR = eyeNR(N, R)
-    Lmod = [None, *L[:-1], None]
-    proto = np.arange(R)
-    slices = [proto[Lmod[i]: Lmod[i + 1]] for i in range(R - 1)]
-    return np.array([INR[:, s].sum(axis=1) for s in slices]).transpose(
-        [-1, *np.arange(R - 2, -1, -1)]
-    )
+    Lacc = [0] + [sum(L[:p+1]) for p in range(P)]
+    IL = [np.sum(INR[Lacc[p]:Lacc[p+1]], axis=0) for p in range(P)]
+    return np.stack(IL, axis=N-1)
 
 
-def ll1gen(F: list, L: list) -> np.ndarray:
+def ll1gen(F: list,
+           L: list) -> np.ndarray:
     """
     Generate a multilinear rank-(L, L, 1) tensor.
 
@@ -468,21 +480,25 @@ def estSNR(X0: np.ndarray, X: np.ndarray) -> np.float64:
     return 20 * np.log10(la.norm(X0) / la.norm(X - X0))
 
 
-def noisy(T: np.ndarray, SNR: float = 0.0) -> np.ndarray:
+def noisy(T: np.ndarray,
+          SNR: float = 0.0) -> tp.Tuple[np.ndarray,
+                                        np.ndarray]:
     """
-    Add noise to a tensor of any order.
+    Generate AWGN noise for a tensor.
 
     Parameters
     ----------
     T : NumPy array
-        Tensor.
+        Input tensor.
     SNR : float, optional
         Signal-to-Noise Ratio. The default is 0.0.
 
     Returns
     -------
-    NumPy array
+    T : NumPy array
         Noisy tensor.
+    N : NumPy array
+        Noise tensor.
     """
     tensor_shape = T.shape
     N = np.random.randn(*tensor_shape)
@@ -982,7 +998,8 @@ def utepair(Psi: list) -> list:
     return [np.diag(phi) for phi in Phi]
 
 
-def sfcheck(mu: tp.Union[list, np.ndarray], mu_hat: tp.Union[list, np.ndarray]) -> list:
+def sfcheck(mu: tp.Union[list, np.ndarray],
+            mu_hat: tp.Union[list, np.ndarray]) -> list:
     """
     Spatial frequencies check.
 
@@ -1075,7 +1092,8 @@ def stmlsvd(
     else:
         for p in perm:
             if fast:
-                U[p], sv[p] = svds(unfold(S, p), k=size_core[p], solver="lobpcg")[:2]
+                U[p], sv[p] = svds(unfold(S, p),
+                                   k=size_core[p], solver="lobpcg")[:2]
             else:
                 U[p], sv[p] = la.svd(unfold(S, p),
                                      full_matrices=usefull,
@@ -1086,9 +1104,9 @@ def stmlsvd(
     return (U, S, sv)
 
 
-def tmlsvd(
-    T: np.ndarray, size_core: tp.Union[None, list, np.ndarray] = None, **varargin: bool
-) -> tuple:
+def tmlsvd(T: np.ndarray,
+           size_core: tp.Union[None, list, np.ndarray] = None,
+           **varargin: bool) -> tuple:
     """
     Truncated multilinear SVD.
 
@@ -1149,7 +1167,9 @@ def tmlsvd(
     return (U, sv)
 
 
-def estcore(T: np.ndarray, U: list, perm: tp.Union[None, list] = None) -> np.ndarray:
+def estcore(T: np.ndarray,
+            U: list,
+            perm: tp.Union[None, list] = None) -> np.ndarray:
     """
     Core tensor estimation.
 
@@ -1176,7 +1196,7 @@ def estcore(T: np.ndarray, U: list, perm: tp.Union[None, list] = None) -> np.nda
     return S
 
 
-# %% CP Decomposition
+# %% Canonical Polyadic Decomposition
 
 
 def ampcpd(Y: np.ndarray, F: list, normcols: bool = False) -> np.ndarray:
@@ -1206,7 +1226,10 @@ def ampcpd(Y: np.ndarray, F: list, normcols: bool = False) -> np.ndarray:
     return np.array([(Y.ravel() / g.ravel()).sum() for g in G])
 
 
-def cpdgevd(T: np.ndarray, R: int, normcols: bool = False, fast: bool = False) -> list:
+def cpdgevd(T: np.ndarray,
+            R: int,
+            normcols: bool = False,
+            fast: bool = False) -> list:
     """
     Canonical Polyadic Decomposition via GEVD (CPD-GEVD).
 
@@ -1236,10 +1259,7 @@ def cpdgevd(T: np.ndarray, R: int, normcols: bool = False, fast: bool = False) -
     F = [U[0] @ la.inv(R.T)] + lskrf(F23, T.shape[1])
 
     if normcols:  # normalize columns
-        F_col_norm = [np.sqrt((f * f.conj()).sum(0)) for f in F]
-        F = [f @ np.diag(1 / f_col_norm) for f, f_col_norm in zip(F, F_col_norm)]
-        allcolnorm = np.vstack(F_col_norm).prod(0) ** (1 / 3)
-        F = [f @ np.diag(allcolnorm) for f in F]
+        F = [colnorm(f) for f in F]
     return F
 
 
@@ -1248,8 +1268,9 @@ def cpdgevd2(
     R: int,
     normcols: bool = False,
     fast: bool = False,
-    thirdonly: bool = False,
-) -> tp.Tuple[np.array, np.array, np.array]:
+    thirdonly: bool = False) -> tp.Tuple[np.array,
+                                         np.array,
+                                         np.array]:
     """
     Canonical Polyadic Decomposition via symmetric GEVD.
 
@@ -1282,10 +1303,7 @@ def cpdgevd2(
     T[:2] = [la.inv(lr) for lr in (L.T.conj(), R.T)]
     F = [u @ t for u, t in zip(U, T)]
     if normcols:  # normalize columns
-        F_col_norm = [np.sqrt((f * f.conj()).sum(0)) for f in F]
-        F = [f @ np.diag(1 / f_col_norm) for f, f_col_norm in zip(F, F_col_norm)]
-        allcolnorm = np.vstack(F_col_norm).prod(0) ** (1 / 3)
-        F = [f @ np.diag(allcolnorm) for f in F]
+        F = [colnorm(f) for f in F]
     return F
 
 
@@ -1316,7 +1334,7 @@ def cpdsevd(
     S_v = np.vstack((S_0, S[:, :, 1]))
     U_v = la.svd(S_v, full_matrices=False)[0]
     U_1 = U_v[:R, :]
-    U_2 = U_v[R : (2 * R), :]
+    U_2 = U_v[R: (2 * R), :]
 
     R_1 = U_1.conj().T @ U_1
     R_2 = U_1.conj().T @ U_2
@@ -1331,10 +1349,7 @@ def cpdsevd(
 
     F = [U[n] @ T[n] for n in range(len(U))]
     if normcols:  # normalize columns
-        F_col_norm = [np.sqrt((f * f.conj()).sum(0)) for f in F]
-        F = [f @ np.diag(1 / f_col_norm) for f, f_col_norm in zip(F, F_col_norm)]
-        allcolnorm = np.vstack(F_col_norm).prod(0) ** (1 / 3)
-        F = [f @ np.diag(allcolnorm) for f in F]
+        F = [colnorm(f) for f in F]
     return F
 
 
