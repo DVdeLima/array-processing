@@ -872,8 +872,14 @@ def gevdpair(Psi: list) -> list:
     list
         Shift-invariant matrices.
     """
-    Rev = la.eig(*Psi[:2])[1]
-    return [Rev.T.conj() @ psi @ Rev for psi in Psi]
+    R = len(Psi)
+    if R == 2:
+        Rev = la.eig(*Psi[:2])[1]
+        return [Rev.T.conj() @ psi @ Rev for psi in Psi]
+    else:
+        return [gevdpair([Psi[0],
+                          Psi[n]])
+                for n in range(1, R)]
 
 
 def sfPhi(Phi: list) -> list:
@@ -1104,7 +1110,6 @@ def stmlsvd(
 
     large = bool(varargin.get("LargeScale"))
     usefull = bool(varargin.get("FullSVD"))
-    fast = bool(varargin.get("Fast"))
 
     U = [None] * N
     sv = [None] * N
@@ -1123,19 +1128,12 @@ def stmlsvd(
                 sv[p] = np.sqrt(abs(ev))
             S = tmprod(S, U[p].conj().T, p)
     else:
-        if fast:
-            for p in perm:
-                U[p], sv[p] = svds(unfold(S, p),
-                                   k=size_core[p], solver="lobpcg")[:2]
-                S = tmprod(S, U[p].conj().T, p)
-        else:
-            for p in perm:
-                U[p], sv[p] = la.svd(unfold(S, p),
-                                     full_matrices=usefull,
-                                     lapack_driver="gesvd")[:2]
-                U[p] = U[p][:, :size_core[p]]
-                sv[p] = sv[p][: size_core[p]]
-                S = tmprod(S, U[p].conj().T, p)
+        for p in perm:
+            U[p], sv[p] = np.linalg.svd(unfold(S, p),
+                                        full_matrices=usefull)[:2]
+            U[p] = U[p][:, :size_core[p]]
+            sv[p] = sv[p][: size_core[p]]
+            S = tmprod(S, U[p].conj().T, p)
     return (U, S, sv)
 
 
@@ -1263,10 +1261,9 @@ def ampcpd(Y: np.ndarray, F: list, normcols: bool = False) -> np.ndarray:
 
 def cpdgevd(T: np.ndarray,
             R: int,
-            normcols: bool = False,
-            fast: bool = False) -> tp.Tuple[np.array,
-                                            np.array,
-                                            np.array]:
+            normcols: bool = False) -> tp.Tuple[np.array,
+                                                np.array,
+                                                np.array]:
     """
     Canonical Polyadic Decomposition via GEVD (CPD-GEVD).
 
@@ -1289,7 +1286,7 @@ def cpdgevd(T: np.ndarray,
         Estimated factor matrices.
 
     """
-    U, S = stmlsvd(T, (R, R, np.max((R, 2))), Fast=fast)[:2]
+    U, S = stmlsvd(T, (R, R, np.max((R, 2))))[:2]
     R = la.eig(S[:, :, 0].T, S[:, :, 1].T)[1]
 
     F23 = unfold(T, 0).T @ U[0].conj() @ R
@@ -1304,7 +1301,6 @@ def cpdgevd2(
     T: np.ndarray,
     R: int,
     normcols: bool = False,
-    fast: bool = False,
     thirdonly: bool = False) -> tp.Tuple[np.array,
                                          np.array,
                                          np.array]:
@@ -1330,8 +1326,8 @@ def cpdgevd2(
         Estimated factor matrices.
 
     """
-    U, S = stmlsvd(T, (R, R, np.max((R, 2))), Fast=fast)[:2]
-    L, R = la.eig(S[:, :, 0], S[:, :, 1], left=True)[1:3]
+    U, S = stmlsvd(T, (R, R, np.max((R, 2))))[:2]
+    L, R = la.eig(S[:, :, 0], S[:, :, 1], left=True)[1:]
 
     T = [None] * 3
     T[2] = np.einsum("ijk->kj", tmprod(S, [L.T.conj(), R.T]))
@@ -1346,10 +1342,9 @@ def cpdgevd2(
 
 def cpdsevd(T: np.ndarray,
             R: int,
-            normcols: bool = False,
-            fast: bool = False) -> tp.Tuple[np.array,
-                                            np.array,
-                                            np.array]:
+            normcols: bool = False) -> tp.Tuple[np.array,
+                                                np.array,
+                                                np.array]:
     """
     Canonical polyadic decomposition via Singular
     and Eigenvalue decomposition (CPD-S/EVD).
@@ -1370,7 +1365,7 @@ def cpdsevd(T: np.ndarray,
     list (of NumPy arrays)
         Estimated factor matrices.
     """
-    U, S = stmlsvd(T, (R, R, 2), Fast=fast)[:2]
+    U, S = stmlsvd(T, (R, R, 2))[:2]
     S_0 = S[:, :, 0]
     S_v = np.vstack((S_0, S[:, :, 1]))
     U_v = la.svd(S_v, full_matrices=False)[0]
