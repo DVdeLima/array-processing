@@ -73,6 +73,7 @@ __all__ = [
     "ute",
     "utepair",
     "sfcheck",
+    "estDOAs",
     "stmlsvd",
     "tmlsvd",
     "estcore",
@@ -124,7 +125,7 @@ def frob(X: np.ndarray,
     """
     if isinstance(axis, int):
         return [frob(x, squared) for x in unfold(X, axis)]
-    frob2 = (X * X.conj()).real.sum()
+    frob2 = (X * X.conj()).real.sum()  # squared Frob. norm
     if squared:
         return frob2
     return np.sqrt(frob2)
@@ -173,12 +174,12 @@ def oprod(F: list) -> np.ndarray:
         DESCRIPTION.
 
     """
-    Ndiff = [f.ndim for f in F]
-    Nacc = [0] + [sum(Ndiff[:n]) for n in range(1, len(F) + 1)]
+    N = [f.ndim for f in F]
+    Nacc = [0] + [sum(N[:n]) for n in range(1, len(F) + 1)]
     modes = list(range(Nacc[-1]))
     modes = [modes[Nacc[m]: Nacc[m+1]] for m in range(len(F))]
     operands = [comb for pair in zip(F, modes) for comb in pair]
-    return np.einsum(*operands, range(sum(Ndiff)))
+    return np.einsum(*operands, range(sum(N)))
 
 
 def kron(F: list) -> np.ndarray:
@@ -259,7 +260,7 @@ def unfold(T: np.ndarray,
     NumPy array
         mode-unfolded tensor.
     """
-    modes_left_is_int = isinstance(modes_left, (int, np.int32))
+    modes_left_is_int = isinstance(modes_left, (int, np.int32, np.int64))
     modes_right_is_none = modes_right is None
     if modes_left_is_int and modes_right_is_none:
         tensor_shape = list(T.shape)
@@ -357,7 +358,7 @@ def tmprod(T: np.ndarray,
             modes = 0
     if isinstance(M, np.ndarray):
         M = [M]
-    if isinstance(modes, int):
+    if isinstance(modes, (int, np.int32, np.int64)):
         modes = [modes]
     no_modes = len(modes)
     new_shapes = range(N, N + no_modes)
@@ -477,7 +478,7 @@ def estSNR(X0: np.ndarray, X: np.ndarray) -> np.float64:
     float
         Estimated SNR.
     """
-    return 20 * np.log10(la.norm(X0) / la.norm(X - X0))
+    return 20 * np.log10(frob(X0) / frob(X - X0))
 
 
 def noisy(T: np.ndarray,
@@ -501,10 +502,12 @@ def noisy(T: np.ndarray,
         Noise tensor.
     """
     tensor_shape = T.shape
-    N = np.random.randn(*tensor_shape)
     if np.iscomplex(T).any():
-        N = N + 1j * np.random.randn(*tensor_shape)
-    scale = la.norm(T) * (10 ** (-SNR / 20)) / la.norm(N)
+        N = np.random.randn(*tensor_shape) + \
+            1j * np.random.randn(*tensor_shape)
+    else:
+        N = np.random.randn(*tensor_shape)
+    scale = frob(T) * (10 ** (-SNR / 20)) / frob(N)
     N *= scale
     T = T + N
     return (T, N)
@@ -513,9 +516,9 @@ def noisy(T: np.ndarray,
 # %% Preprocessing
 
 
-def lra(
-    X: np.ndarray, R: tp.Union[int, list, np.ndarray], useTMLSVD: bool = False
-) -> np.ndarray:
+def lra(X: np.ndarray,
+        R: tp.Union[int, list, None] = None,
+        useTMLSVD: bool = False) -> np.ndarray:
     """
     Low-Rank Approximation.
 
@@ -538,7 +541,9 @@ def lra(
         U, s, VH = svds(X, R)
         return U @ np.diag(s) @ VH
     else:
-        if type(R) is int:
+        if R is None:
+            size_core = X.shape
+        elif isinstance(R, int):
             size_core = [R] * N
         else:
             size_core = R
@@ -734,9 +739,8 @@ def una(M: tp.Union[int, list, np.ndarray], mu: np.ndarray) -> np.ndarray:
     return A
 
 
-def uxa(
-    M: tp.Union[int, list, np.ndarray], D: tp.Union[int, list, np.ndarray] = 1
-) -> tp.Tuple[list, list]:
+def uxa(M: tp.Union[int, list],
+        D: tp.Union[int, list] = 1) -> tp.Tuple[list, list]:
     """
     Uniform Linear/Rectangular/Cubic Array.
 
@@ -756,10 +760,10 @@ def uxa(
     List
         List of steering matrices and list of spatial frequencies.
     """
-    try:
-        R = len(M)
-    except TypeError:
+    if isinstance(M, int):
         R = 1
+    else:
+        R = len(M)
 
     if isinstance(D, int):
         if R == 1:
@@ -780,7 +784,7 @@ def uxa(
         mu = [np.pi * np.cos(az) * np.sin(el)]
         mu.append(np.pi * np.sin(az) * np.sin(el))
     if R == 3:
-        mu.append(np.pi * np.sin(el))
+        mu.append(np.pi * np.cos(el))
     A = una(M, mu)
 
     return (A, mu)
@@ -819,7 +823,7 @@ def ste(X: np.ndarray, D: int, **varargin: bool) -> list:
     J_1 = [np.hstack((np.zeros((m, 1)), np.eye(m))) for m in Msel]
 
     I_left = [np.eye(np.prod(M[:r]).astype(int)) for r in range(R)]
-    I_right = [np.eye(np.prod(M[r + 1 : R]).astype(int)) for r in range(R)]
+    I_right = [np.eye(np.prod(M[r + 1: R]).astype(int)) for r in range(R)]
 
     J_0 = [
         kron([i_left, j_0, i_right])
@@ -832,7 +836,7 @@ def ste(X: np.ndarray, D: int, **varargin: bool) -> list:
 
     # subspace estimation
     if not trunc:
-        perm = np.argsort(X.shape)
+        perm = np.flip(np.argsort(X.shape))
         U, S = stmlsvd(X, P, perm, FullSVD=usefull)[:2]
         ISSE = unfold(tmprod(S, U[:R]), R).T
     else:
@@ -854,38 +858,51 @@ def ste(X: np.ndarray, D: int, **varargin: bool) -> list:
     return Psi
 
 
-def gevdpair(Psi: list, proj: bool = False) -> list:
+def gevdpair(Psi: list) -> list:
     """
-    GEVD-based spatial frequency pairing.
+    GEVD-based shift-invariant eigenstructure pairing.
 
     Parameters
     ----------
     Psi : list
         Shift invariance eigenstructures.
-    proj : bool, optional
-        Use projection. The default is False.
 
     Returns
     -------
     list
         Shift-invariant matrices.
     """
+    Rev = la.eig(*Psi[:2])[1]
+    return [Rev.T.conj() @ psi @ Rev for psi in Psi]
 
-    R = len(Psi)
 
-    if R == 2:
-        R = la.eig(Psi[0], Psi[1])[1]
-        Phi = [la.inv(R) @ psi @ R for psi in Psi]
-    elif proj:
-        D = Psi[0].shape[0]
-        T = np.stack(Psi, 2)
-        P = la.svd(unfold(T, 2))[0][:, :2].conj().T
-        T = fold(P @ unfold(T, 2), 2, (D, D, 2))
-        R = la.eig(T[:, :, 0], T[:, :, 1])[1]
-        Phi = [la.inv(R) @ psi @ R for psi in Psi]
+def sfPhi(Phi: list) -> list:
+    """
+    Calculate spatial frequencies from
+    shift-invariant eigenstructures
+
+    Parameters
+    ----------
+    Phi : list
+        List of shift-invariant eigenstructures.
+
+    Returns
+    -------
+    list
+        Paired spatial frequencies.
+    """
+    if isinstance(Phi[0], np.ndarray):
+        return [np.angle(np.diag(phi)) for phi in Phi]
     else:
-        Phi = [gevdpair([Psi[0], Psi[r]]) for r in range(1, R)]
-    return Phi
+        mus = [[np.angle(np.diag(p))
+                for p in Phi[n]] for n in range(len(Phi))]
+        idxs = [np.argsort(m[0]) for m in mus]
+    if np.all([idxs[0] == ids for ids in idxs[1:]]):
+        return mus[0] + [m[1] for m in mus[1:]]
+    else:
+        return [m[idxs[0]]
+                for m in mus[0]] + [m[1][idx]
+                                    for m, idx in zip(mus[1:], idxs[1:])]
 
 
 def ute(X: np.ndarray, D: int, **varargin: bool) -> list:
@@ -934,7 +951,7 @@ def ute(X: np.ndarray, D: int, **varargin: bool) -> list:
     ]
 
     I_left = [np.eye(np.prod(M[:r]).astype(int)) for r in range(R)]
-    I_right = [np.eye(np.prod(M[r + 1 : R]).astype(int)) for r in range(R)]
+    I_right = [np.eye(np.prod(M[r + 1: R]).astype(int)) for r in range(R)]
 
     K = [kron([i_left, k, i_right]) for i_left, k, i_right in zip(I_left, K, I_right)]
 
@@ -999,36 +1016,52 @@ def utepair(Psi: list) -> list:
 
 
 def sfcheck(mu: tp.Union[list, np.ndarray],
-            mu_hat: tp.Union[list, np.ndarray]) -> list:
+            mu_hat: tp.Union[list, np.ndarray]) -> tp.Tuple[np.ndarray,
+                                                            float]:
     """
-    Spatial frequencies check.
-
-    Unimplemented
+    Check and sort estimated spatial frequencies.
 
     Parameters
     ----------
     mu : tp.Union[list, np.ndarray]
-        True spatial frequencies.
+        True spacial frequencies.
     mu_hat : tp.Union[list, np.ndarray]
-        Estimated spatial frequencies.
+        Estimated spacial frequencies.
 
     Returns
     -------
-    List
-        Est. spatial frequencies, squared estimation error.
-
+    NumPy array
+        Matrix of sorted estimated spatial frequencies.
+    float
+        Error (Euclidian distance).
     """
-    mu = np.array(mu)
-    mu_hat = np.array(mu_hat)
-    D = mu.shape[1]
-    combs = list(permutations(range(D)))
-    e = [la.norm(mu - mu_hat[:, comb], True) for comb in combs]
-    idx = np.array(e).argmin()
-    return mu_hat[:, combs[idx]], e[idx]
+    if isinstance(mu, (list, tuple)):
+        mu = np.stack(mu)
+    D = mu.shape[0]
+    if isinstance(mu_hat, (list, tuple)):
+        mu_hat = np.stack(mu_hat)
+    perms = list(permutations(range(D)))
+    e = [frob(mu - mu_hat[:, perm]) for perm in perms]
+    idx = np.argmin(e)
+    return mu_hat[:, perms[idx]], e[idx]
+
+
+def estDOAs(mu: tp.Union[list, np.ndarray]) -> np.ndarray:
+    if isinstance(mu, list):
+        mu = np.stack(mu)
+    if mu.ndim == 1:
+        R = 1
+    else:
+        R = np.shape(mu)[0]
+    if R == 1:
+        return np.arcsin(mu / np.pi)
+    else:
+        az = np.arctan2(mu[1], mu[0])
+        el = np.arcsin(mu[1] / (np.pi * np.sin(az)))
+    return np.stack((az, el))
 
 
 # %% Multilinear SVD
-
 
 def stmlsvd(
     T: np.ndarray,
@@ -1090,17 +1123,19 @@ def stmlsvd(
                 sv[p] = np.sqrt(abs(ev))
             S = tmprod(S, U[p].conj().T, p)
     else:
-        for p in perm:
-            if fast:
+        if fast:
+            for p in perm:
                 U[p], sv[p] = svds(unfold(S, p),
                                    k=size_core[p], solver="lobpcg")[:2]
-            else:
+                S = tmprod(S, U[p].conj().T, p)
+        else:
+            for p in perm:
                 U[p], sv[p] = la.svd(unfold(S, p),
                                      full_matrices=usefull,
                                      lapack_driver="gesvd")[:2]
-                U[p] = U[p][:, : size_core[p]]
+                U[p] = U[p][:, :size_core[p]]
                 sv[p] = sv[p][: size_core[p]]
-            S = tmprod(S, U[p].conj().T, p)
+                S = tmprod(S, U[p].conj().T, p)
     return (U, S, sv)
 
 
@@ -1229,7 +1264,9 @@ def ampcpd(Y: np.ndarray, F: list, normcols: bool = False) -> np.ndarray:
 def cpdgevd(T: np.ndarray,
             R: int,
             normcols: bool = False,
-            fast: bool = False) -> list:
+            fast: bool = False) -> tp.Tuple[np.array,
+                                            np.array,
+                                            np.array]:
     """
     Canonical Polyadic Decomposition via GEVD (CPD-GEVD).
 
@@ -1307,13 +1344,17 @@ def cpdgevd2(
     return F
 
 
-def cpdsevd(
-    T: np.ndarray, R: int, normcols: bool = False, fast: bool = False
-) -> tp.Tuple[np.array, np.array, np.array]:
+def cpdsevd(T: np.ndarray,
+            R: int,
+            normcols: bool = False,
+            fast: bool = False) -> tp.Tuple[np.array,
+                                            np.array,
+                                            np.array]:
     """
     Canonical polyadic decomposition via Singular
-        and Eigenvalue decomposition (CPD-S/EVD)
-    Don't use this, it's probably very imprecise
+    and Eigenvalue decomposition (CPD-S/EVD).
+
+    Don't use this, probably very imprecise in most cases.
 
     Parameters
     ----------
