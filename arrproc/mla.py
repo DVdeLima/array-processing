@@ -876,7 +876,7 @@ def ste(X: np.ndarray,
         ISSE = unfold(tmprod(S, U[:R]), R).T
 
     # shift invariance equations
-    Psi = [la.pinv(j_0 @ ISSE) @ (j_1 @ ISSE)
+    Psi = [np.linalg.pinv(j_0 @ ISSE) @ (j_1 @ ISSE)
            for j_0, j_1 in zip(J_0, J_1)]
     return Psi
 
@@ -1013,7 +1013,7 @@ def ute(X: np.ndarray,
         ISSE = unfold(tmprod(S, U[:R]), R).T
 
     # shift invariance equations
-    Psi = [np.real(la.pinv(k.real @ ISSE) @ (k.imag @ ISSE))
+    Psi = [np.real(np.linalg.pinv(k.real @ ISSE) @ (k.imag @ ISSE))
            for k in K]
 
     return Psi
@@ -1213,9 +1213,9 @@ def tmlsvd(T: np.ndarray,
             sv = [np.sqrt(abs(ev))]
     else:
         if usefull:
-            U, sv = zip(*[la.svd(unfold(T, n),
-                                 full_matrices=usefull,
-                                 lapack_driver="gesvd")[:2]
+            U, sv = zip(*[np.linalg.svd(unfold(T, n),
+                                        full_matrices=usefull,
+                                        lapack_driver="gesvd")[:2]
                           for n in range(N)])
             U = [u[:, :size] for u, size in zip(U, size_core)]
             sv = [s[:size] for s, size in zip(sv, size_core)]
@@ -1316,7 +1316,7 @@ def cpdgevd(T: np.ndarray,
     R = la.eig(S[:, :, 0].T, S[:, :, 1].T)[1]
 
     F23 = unfold(T, 0).T @ U[0].conj() @ R
-    F = [U[0] @ la.inv(R.T)] + lskrf(F23, T.shape[1])
+    F = [U[0] @ np.linalg.inv(R.T)] + lskrf(F23, T.shape[1])
 
     if normcols:  # normalize columns
         F = [colnorm(f) for f in F]
@@ -1359,7 +1359,7 @@ def cpdgevd2(
     T[2] = tmprod(S, [L.T.conj(), R.T]).diagonal()
     if thirdonly:
         return U[2] @ T[2]
-    T[:2] = [la.inv(lr) for lr in (L.T.conj(), R.T)]
+    T[:2] = [np.linalg.inv(lr) for lr in (L.T.conj(), R.T)]
     F = [u @ t for u, t in zip(U, T)]
     if normcols:  # normalize columns
         F = [colnorm(f) for f in F]
@@ -1394,20 +1394,20 @@ def cpdsevd(T: np.ndarray,
     U, S = stmlsvd(T, (R, R, 2))[:2]
     S_0 = S[:, :, 0]
     S_v = np.vstack((S_0, S[:, :, 1]))
-    U_v = la.svd(S_v, full_matrices=False)[0]
+    U_v = np.linalg.svd(S_v, full_matrices=False)[0]
     U_1 = U_v[:R, :]
     U_2 = U_v[R: (2 * R), :]
 
     R_1 = U_1.conj().T @ U_1
     R_2 = U_1.conj().T @ U_2
 
-    d, E = la.eig(R_2 @ la.inv(R_1))
+    d, E = la.eig(R_2 @ np.linalg.inv(R_1))
 
-    T_temp = la.inv(R_1) @ E
+    T_temp = np.linalg.inv(R_1) @ E
 
     T = [U_1 @ T_temp]
-    T.append((la.pinv(T[0]) @ S_0).T)
-    T.append(unfold(S, 2) @ (la.pinv(kr(T))).T)
+    T.append((np.linalg.pinv(T[0]) @ S_0).T)
+    T.append(unfold(S, 2) @ (np.linalg.pinv(kr(T))).T)
 
     F = [U[n] @ T[n] for n in range(len(U))]
     if normcols:  # normalize columns
