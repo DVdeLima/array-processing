@@ -51,13 +51,12 @@ __all__ = [
 import itertools as it
 
 import numpy as np
-import scipy.linalg as la
 import typing as tp
 
-from scipy.sparse.linalg import svds
 from scipy.stats import gmean
 
 # %% Debug modules
+
 # import pdb as ipdb
 # ipdb.set_trace()
 
@@ -81,11 +80,13 @@ def colnorm(X: np.ndarray) -> np.ndarray:
 
     """
     if X.ndim == 1:
-        return X / la.norm(X)
-    return X @ np.diag(1 / la.norm(X, axis=0))
+        return X / np.linalg.norm(X)
+    return X @ np.diag(1 / np.linalg.norm(X, axis=0))
 
 
-def lskrf(K: np.ndarray, M: tp.Union[int, list, np.ndarray]) -> list:
+def lskrf(K: np.ndarray,
+          M: tp.Union[int, list]) -> tp.Tuple[np.ndarray,
+                                              np.ndarray]:
     """
     Least squares Khatri-Rao factorization.
 
@@ -93,7 +94,7 @@ def lskrf(K: np.ndarray, M: tp.Union[int, list, np.ndarray]) -> list:
     ----------
     K : NumPy array
         Khatri-Rao product.
-    M : int, list, or NumPy array
+    M : int, list
         Size of first dimension or list
         of sizes (of first dimension)
 
@@ -105,11 +106,13 @@ def lskrf(K: np.ndarray, M: tp.Union[int, list, np.ndarray]) -> list:
     I, R = K.shape
     if isinstance(M, int):
         M = [M, I // M]
-    baT = [np.reshape(K.T[r], M).T for r in range(R)]
-    u, s, vH = zip(*[svds(baTr, 1, solver="lobpcg") for baTr in baT])
-    N = np.diagflat(np.sqrt(s))
-    A = [np.squeeze(vH).conj().T @ N, np.squeeze(u).T @ N]
-    return A
+    baT = [K[:, r].reshape(M) for r in range(R)]
+    U, s, VH = zip(*[np.linalg.svd(brarT, full_matrices=False)
+                     for brarT in baT])
+    u = [u.T[0] for u in U]
+    v = [vh[0] for vh in VH]
+    S = np.diag([np.sqrt(ess[0]) for ess in s])
+    return np.stack(u, axis=1) @ S, np.stack(v, axis=1) @ S
 
 
 def noisy(M: np.ndarray, SNR: float = 0.0) -> np.ndarray:
@@ -133,7 +136,10 @@ def noisy(M: np.ndarray, SNR: float = 0.0) -> np.ndarray:
     N = np.random.randn(*size_mat)
     if np.iscomplex(M).any():
         N = N + 1j * np.random.randn(*size_mat)
-    scale = la.norm(M, "fro") * (10 ** (-SNR / 20)) / la.norm(N, "fro")
+    scale = np.linalg.norm(M,
+                           "fro") * (10 ** (-SNR
+                                            / 20)) / np.linalg.norm(N,
+                                                                    "fro")
     N *= scale
     M = M + N
     return (M, N)
@@ -168,7 +174,8 @@ def rmse(E: np.ndarray, D: tp.Union[np.ndarray, None] = None) -> np.ndarray:
 # %% Preprocessing
 
 
-def lra(X: np.ndarray, R: int) -> np.ndarray:
+def lra(X: np.ndarray,
+        R: tp.Union[int, None] = None) -> np.ndarray:
     """
     Low-Rank Approximation.
 
@@ -183,10 +190,11 @@ def lra(X: np.ndarray, R: int) -> np.ndarray:
     -------
     NumPy array
         Low-rank approximation of input matrix.
-
     """
-    U, s, VH = svds(X, k=R, return_singular_vectors=True, solver="lobpcg")
-    return U @ np.diag(s) @ VH
+    if R is None:
+        R = min(X.shape)
+    U, s, VH = np.linalg.svd(X, full_matrices=False)
+    return U[:, :R] @ np.diag(s[:R]) @ VH[:R]
 
 
 def selM(M: int, Msub: int, shift: int = 0) -> np.ndarray:
@@ -216,9 +224,9 @@ def selM(M: int, Msub: int, shift: int = 0) -> np.ndarray:
     L = M - Msub + 1
     if shift >= L:
         raise SystemExit("Shift cannot exceed no. of subarrays.")
-    return np.hstack(
-        (np.zeros((Msub, shift)), np.eye(Msub), np.zeros((Msub, M - (Msub + shift))))
-    ).astype(int)
+    return np.hstack((np.zeros((Msub, shift)),
+                      np.eye(Msub),
+                      np.zeros((Msub, M - (Msub + shift)))))
 
 
 def fba(X: np.ndarray) -> np.ndarray:
@@ -301,7 +309,8 @@ def desps(X: np.ndarray, L: int = 2) -> np.ndarray:
         X_row = X[Msub - 1, N:]
         return np.vstack((X_top, X_row.reshape((L - 1, N))))
     else:
-        raise SystemExit("No. of samples must be a multiple of the no. of subarrays")
+        err_msg = "No. of samples must be a multiple of the no. of subarrays"
+        raise SystemExit(err_msg)
 
 
 def MuDe(X: np.ndarray, D: int, L: int = 2) -> np.ndarray:
@@ -340,7 +349,9 @@ def MuDe(X: np.ndarray, D: int, L: int = 2) -> np.ndarray:
 # %% Array Processing
 
 
-def ula(M: int, D: tp.Union[int, list, np.ndarray]) -> tp.Tuple[np.ndarray, np.ndarray]:
+def ula(M: int,
+        D: tp.Union[int, list]) -> tp.Tuple[np.ndarray,
+                                            np.ndarray]:
     """
     Uniform Linear Array generator.
 
@@ -349,15 +360,14 @@ def ula(M: int, D: tp.Union[int, list, np.ndarray]) -> tp.Tuple[np.ndarray, np.n
     M : int
         Number of array elements.
     D : int or list
-        Number of signals or directions of arrival in radians.
+        Number of signals or directions of arrival (in radians).
 
     Returns
     -------
     A : NumPy array
         Array steering matrix.
-    az : NumPy array
-        Directions of arrival (azimuths).
-
+    sf : NumPy array
+        Spatial frequencies.
     """
     if isinstance(D, int):
         az = (np.random.rand(D) - 0.5) * np.pi
@@ -366,12 +376,11 @@ def ula(M: int, D: tp.Union[int, list, np.ndarray]) -> tp.Tuple[np.ndarray, np.n
     x = np.arange((1 - M), M, 2) / 2
     mu_x = np.pi * np.sin(az)
     A = np.exp(1j * np.outer(x, mu_x))
-    return A, az
+    return A, mu_x
 
 
-def esprit1D(
-    X: np.ndarray, D: tp.Union[int, None] = None, tol: float = 1e-3
-) -> np.ndarray:
+def esprit1D(X: np.ndarray,
+             D: tp.Union[int, None] = None) -> np.ndarray:
     """
     One-dimensional ESPRIT.
 
@@ -381,8 +390,6 @@ def esprit1D(
         Input matrix.
     D : int, optional
         Model order. Defaults to no. of columns.
-    tol : float, optional
-        Tolerance. Defaults to 1e-6
 
     Returns
     -------
@@ -390,22 +397,20 @@ def esprit1D(
         Spatial frequencies vector
 
     """
-    M = len(X)
-    if D is None:
-        if X.ndim == 1:
-            if X.conj().T @ X - M == 0:
-                return np.angle(X[1] / X[0])
+    if X.ndim == 2:  # matrix
+        N = X.shape[1]  # no. cols
+        if N > D:
+            Us = np.linalg.svd(X, full_matrices=False)[0][:, :D]
+            Psi = np.linalg.pinv(Us[:-1]) @ Us[1:]
+            Phi = np.linalg.eigvals(Psi)
+        elif N == D:
+            if (np.linalg.norm(X, axis=0) == np.ones(D)).all():
+                Psi = np.linalg.pinv(X[:-1]) @ X[1:]
+                Phi = np.linalg.eigvals(Psi)
             else:
-                Us = X
-        else:
-            if np.trace(X.conj().T @ X - M * X.shape[1] == 0):
-                return np.angle(X[1] / X[0])
-            else:
-                Us = X
+                Phi = X[1] / X[0]
     else:
-        Us = svds(X, k=D, return_singular_vectors="u", solver="lobpcg")[0]
-    Psi = la.pinv(Us[:-1]) @ Us[1:]
-    Phi = la.eigvals(Psi)
+        Phi = X[1] / X[0]
     return np.angle(Phi)
 
 
@@ -429,7 +434,7 @@ def sort_sf(mu: np.ndarray, mu_hat: np.ndarray) -> tp.Tuple[np.ndarray, float]:
     """
     D = len(mu)
     perms = list(it.permutations(range(D)))
-    e = np.array([la.norm(mu - mu_hat[p,]) ** 0.5 for p in perms])
+    e = np.array([np.linalg.norm(mu - mu_hat[p,]) ** 0.5 for p in perms])
     idx = e.argmin()
     return (mu_hat[perms[idx],], e[idx])
 
@@ -460,7 +465,7 @@ def aic(X: np.ndarray) -> tp.Union[int, tp.Tuple[int, np.ndarray, np.ndarray]]:
     M, N = X.shape
     R = np.cov(X)
 
-    evs = np.flip(la.eig(R)[0])
+    evs = np.linalg.eigvals(R)[::-1]
 
     k = np.arange(M)
     K = 2 * k * (2 * M - k)
@@ -468,17 +473,17 @@ def aic(X: np.ndarray) -> tp.Union[int, tp.Tuple[int, np.ndarray, np.ndarray]]:
     if evs.sum() < 0:
         return 0
     else:
-        L = np.array(
-            [
-                -2 * N * (M - m) * np.log((gmean(evs[m:M]) / (evs[m:M].mean())))
-                for m in range(M)
-            ]
-        ).real
-        aic = np.flip(L + K)
-        return (aic.argmin() + 2, np.flip(L), np.flip(K))
+        L = np.array([-2 * N * (M - m)
+                      * np.log((gmean(evs[m:M])
+                                / (evs[m:M].mean())))
+                      for m in range(M)]).real
+        aic = (L + K)[::-1]
+        return aic.argmin() + 1, L[::-1], K[::-1]
 
 
-def eft(X: np.ndarray, tol: float = 1e-2, q: tp.Union[None, float] = None) -> int:
+def eft(X: np.ndarray,
+        tol: float = 1e-2,
+        q: tp.Union[float, None] = None) -> int:
     """
     Exponential Fitting Test.
 
@@ -505,7 +510,7 @@ def eft(X: np.ndarray, tol: float = 1e-2, q: tp.Union[None, float] = None) -> in
     M, N = X.shape
     R = np.cov(X)
 
-    evs = la.eig(R)[0]
+    evs = np.linalg.eigvals(R)
     if q is None:
         q = np.exp(
             np.sqrt(
@@ -518,5 +523,5 @@ def eft(X: np.ndarray, tol: float = 1e-2, q: tp.Union[None, float] = None) -> in
     eft = evs[-1] * (q ** np.arange(M - 1, -1, -1))
     d = 0
     while abs(evs[d] - eft[d]) > tol:
-        d = d + 1
+        d += 1
     return d
