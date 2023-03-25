@@ -8,8 +8,9 @@ Array Signal Processing.
 Includes:
     1. Basic operations
         Column normalization (colnorm)
-        Least-Squares Khatri-Rao factorization (lskrf)
+        Add noise to RX matrix (noisy)
         Root mean square error (rmse)
+        Least-Squares Khatri-Rao factorization (lskrf)
     2. Preprocessing
         Low-rank approximation (lra)
         Selection matrix (selM)
@@ -30,9 +31,9 @@ Includes:
 
 __all__ = [
     "colnorm",
-    "lskrf",
     "noisy",
     "rmse",
+    "lskrf",
     "lra",
     "selM",
     "fba",
@@ -84,37 +85,6 @@ def colnorm(X: np.ndarray) -> np.ndarray:
     return X @ np.diag(1 / np.linalg.norm(X, axis=0))
 
 
-def lskrf(K: np.ndarray,
-          M: tp.Union[int, list]) -> tp.Tuple[np.ndarray,
-                                              np.ndarray]:
-    """
-    Least squares Khatri-Rao factorization.
-
-    Parameters
-    ----------
-    K : NumPy array
-        Khatri-Rao product.
-    M : int, list
-        Size of first dimension or list
-        of sizes (of first dimension)
-
-    Returns
-    -------
-    list (of NumPy arrays)
-        Factor matrices.
-    """
-    I, R = K.shape
-    if isinstance(M, int):
-        M = [M, I // M]
-    baT = [K[:, r].reshape(M) for r in range(R)]
-    U, s, VH = zip(*[np.linalg.svd(brarT, full_matrices=False)
-                     for brarT in baT])
-    u = [u.T[0] for u in U]
-    v = [vh[0] for vh in VH]
-    S = np.diag([np.sqrt(ess[0]) for ess in s])
-    return np.stack(u, axis=1) @ S, np.stack(v, axis=1) @ S
-
-
 def noisy(M: np.ndarray, SNR: float = 0.0) -> np.ndarray:
     """
     Add noise to a matrix.
@@ -145,7 +115,8 @@ def noisy(M: np.ndarray, SNR: float = 0.0) -> np.ndarray:
     return (M, N)
 
 
-def rmse(E: np.ndarray, D: tp.Union[np.ndarray, None] = None) -> np.ndarray:
+def rmse(E: np.ndarray,
+         D: tp.Union[np.ndarray, None] = None) -> np.ndarray:
     """
     Root Mean Square Error.
 
@@ -158,8 +129,8 @@ def rmse(E: np.ndarray, D: tp.Union[np.ndarray, None] = None) -> np.ndarray:
 
     Returns
     -------
-    None.
-
+    NumPy array
+        Root mean squared error.
     """
     if D is None:
         E2 = E**2
@@ -169,6 +140,37 @@ def rmse(E: np.ndarray, D: tp.Union[np.ndarray, None] = None) -> np.ndarray:
         E2 = (E - np.tile(D, (E.shape[1], 1)).T) ** 2
     rmse = np.mean(E2, axis=0) ** (1 / 2)
     return rmse
+
+
+def lskrf(K: np.ndarray,
+          M: tp.Union[int, list]) -> tp.Tuple[np.ndarray,
+                                              np.ndarray]:
+    """
+    Least squares Khatri-Rao factorization.
+
+    Parameters
+    ----------
+    K : NumPy array
+        Khatri-Rao product.
+    M : int, list
+        Size of first dimension or list
+        of sizes (of first dimension)
+
+    Returns
+    -------
+    list (of NumPy arrays)
+        Factor matrices.
+    """
+    I, R = K.shape
+    if isinstance(M, int):
+        M = [M, I // M]
+    baT = [K[:, r].reshape(M) for r in range(R)]
+    U, s, VH = zip(*[np.linalg.svd(brarT, full_matrices=False)
+                     for brarT in baT])
+    u = [u.T[0] for u in U]
+    v = [vh[0] for vh in VH]
+    S = np.diag([np.sqrt(ess[0]) for ess in s])
+    return np.stack(u, axis=1) @ S, np.stack(v, axis=1) @ S
 
 
 # %% Preprocessing

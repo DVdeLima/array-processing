@@ -1434,8 +1434,8 @@ def lskrf(K: np.ndarray, M: tp.Union[int, list, np.ndarray]) -> list:
     """
     I, R = K.shape
     if isinstance(M, int):
-        M = [M, I // M]
         N = 2
+        M = [M, I // M]
     else:
         N = len(M)
 
