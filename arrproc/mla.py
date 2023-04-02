@@ -1122,8 +1122,7 @@ def stmlsvd(T: np.ndarray,
     Returns
     -------
     tuple
-        Singular vector matrices, tensor core, singular values vector.
-
+        Singular vector matrices, tensor core, singular values vectors.
     """
     tensor_shape = list(T.shape)
     N = T.ndim
@@ -1188,13 +1187,14 @@ def tmlsvd(T: np.ndarray,
     -------
     tuple
         Singular vector matrices, singular values
-
     """
     tensor_shape = list(T.shape)
     N = T.ndim
 
     if size_core is None:
         size_core = tensor_shape
+    if isinstance(size_core, int):
+        size_core = [size_core] * N
 
     large = bool(varargin.get("LargeScale"))
     usefull = bool(varargin.get("FullSVD"))
