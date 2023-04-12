@@ -143,8 +143,7 @@ def rmse(E: np.ndarray,
 
 
 def lskrf(K: np.ndarray,
-          M: tp.Union[int, list]) -> tp.Tuple[np.ndarray,
-                                              np.ndarray]:
+          M: tp.Union[int, list]) -> list:
     """
     Least squares Khatri-Rao factorization.
 
@@ -161,16 +160,22 @@ def lskrf(K: np.ndarray,
     list (of NumPy arrays)
         Factor matrices.
     """
-    I, R = K.shape
+    I, C = K.shape
     if isinstance(M, int):
         M = [M, I // M]
-    baT = [K[:, r].reshape(M) for r in range(R)]
-    U, s, VH = zip(*[np.linalg.svd(brarT, full_matrices=False)
-                     for brarT in baT])
-    u = [u.T[0] for u in U]
-    v = [vh[0] for vh in VH]
-    S = np.diag([np.sqrt(ess[0]) for ess in s])
-    return np.stack(u, axis=1) @ S, np.stack(v, axis=1) @ S
+    N = len(M)
+    F = []
+    for n in range(N - 1):
+        abT = [np.reshape(K[:, c], [M[n], np.prod(M[(n + 1):])])
+               for c in range(C)]
+        U, s, VH = zip(*[np.linalg.svd(m, full_matrices=False) for m in abT])
+        u = [u[:, 0] for u in U]
+        v = [vH[0] for vH in VH]
+        S = np.diagflat([np.sqrt(ess[0]) for ess in s])
+        F.append(np.stack(u, axis=1) @ S)
+        K = np.stack(v, axis=1).conj() @ S
+    F.append(K)
+    return F
 
 
 # %% Preprocessing

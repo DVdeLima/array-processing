@@ -79,14 +79,14 @@ __all__ = [
     "estcore",
     "cpdgevd",
     "cpdgevd2",
-    "cpdsevd",
     "lskrf",
 ]
 
 # %% Load dependencies
 
 import numpy as np
-import scipy.linalg as la
+import numpy.linalg as la
+from scipy.linalg import eig
 import typing as tp
 
 # %% Load individual functions
@@ -120,7 +120,6 @@ def frob(X: np.ndarray,
     -------
     float
         Frobenius norm.
-
     """
     if isinstance(axis, int):
         return [frob(x, squared) for x in unfold(X, axis)]
@@ -171,7 +170,6 @@ def oprod(F: list) -> np.ndarray:
     -------
     TYPE
         DESCRIPTION.
-
     """
     N = [f.ndim for f in F]
     Nacc = [0] + [sum(N[:n]) for n in range(1, len(F) + 1)]
@@ -194,7 +192,6 @@ def kron(F: list) -> np.ndarray:
     -------
     NumPy array
         Kronecker product.
-
     """
     N = len(F)
     F = [np.matrix(f).T if f.ndim == 1 else f for f in F]
@@ -224,7 +221,6 @@ def kr(F: list) -> np.ndarray:
     -------
     NumPy array
         Khatri-Rao product.
-
     """
     N = len(F)
     if np.all([f.ndim == 1 for f in F]):
@@ -347,7 +343,6 @@ def tmprod(T: np.ndarray,
     -------
     NumPy array
         Tensor-matrix product.
-
     """
     N = T.ndim
     if modes is None:
@@ -387,7 +382,7 @@ def eyeNR(N: int, R: int) -> np.ndarray:
     if N < 3:
         return np.eye(R)
     eye = np.zeros([R] * N, int)
-    eye[tuple(np.arange(R) for n in range(N))] = 1
+    eye[tuple(np.arange(R) for r in range(R))] = 1
     return eye
 
 
@@ -408,11 +403,10 @@ def cpdgen(F: list, opt: bool = False) -> np.ndarray:
     -------
     NumPy array
         Generator tensor.
-
     """
     N = len(F)
     modes = [[n, N] for n in range(N)]
-    operands = operands = [comb for pair in zip(F, modes) for comb in pair]
+    operands = [comb for pair in zip(F, modes) for comb in pair]
     return np.einsum(*operands, range(N))
 
 
@@ -512,17 +506,35 @@ def noisy(T: np.ndarray,
     return (T, N)
 
 
-def truncate(T: np.ndarray,
+def truncate(M: np.ndarray,
              R: int,
              axis: int = 1) -> np.ndarray:
-    N = T.ndim
+    """
+    Truncate a matrix or vector.
+
+    Parameters
+    ----------
+    M : NumPy array
+        Tensor.
+    R : int
+        Rank.
+    axis : int, optional
+        Axis for trunction. The default is 1 (columns).
+
+    Returns
+    -------
+    NumPy array
+        Truncated matrix or vector.
+
+    """
+    N = M.ndim
     if N == 1:
-        return T[:R]
+        return M[:R]
     elif N == 2:
         if axis:
-            return T.T[:R].T
+            return M.T[:R].T
         else:
-            return T[:R]
+            return M[:R]
 
 # %% Preprocessing
 
@@ -549,7 +561,7 @@ def lra(X: np.ndarray,
     N = X.ndim
 
     if N == 2:
-        U, s, VH = np.linalg.svd(X, full_matrices=False)
+        U, s, VH = la.svd(X, full_matrices=False)
         if isinstance(R, (int, np.integer)):
             U = U[:, :R]
             S = np.diagonal(s[:R])
@@ -859,14 +871,14 @@ def ste(X: np.ndarray,
     # subpace estimation
     if (kron_sse ^ matrix_sse):
         Us, sigmas = [truncate(m, D)
-                      for m in np.linalg.svd(unfold(X, R).T,
-                                             full_matrices=False)[:2]]
+                      for m in la.svd(unfold(X, R).T,
+                                      full_matrices=False)[:2]]
         Sigmas = np.diag(sigmas)
         if matrix_sse:
             ISSE = Us @ Sigmas
         else:
             U = [truncate(m, D)
-                 for m in [np.linalg.svd(unfold(X, r))[0]
+                 for m in [la.svd(unfold(X, r))[0]
                            for r in range(R)]]
             U_Kron = kron(U)
             ISSE = U_Kron @ U_Kron.T.conj() @ (Us @ Sigmas)
@@ -876,7 +888,7 @@ def ste(X: np.ndarray,
         ISSE = unfold(tmprod(S, U[:R]), R).T
 
     # shift invariance equations
-    Psi = [np.linalg.pinv(j_0 @ ISSE) @ (j_1 @ ISSE)
+    Psi = [la.pinv(j_0 @ ISSE) @ (j_1 @ ISSE)
            for j_0, j_1 in zip(J_0, J_1)]
     return Psi
 
@@ -896,14 +908,14 @@ def gevdpair(Psi: list) -> list:
         Shift-invariant matrices.
     """
     R = len(Psi)
-    Rev = la.eig(*Psi[:2])[1]
+    Rev = eig(*Psi[:2])[1]
     Phi = [Rev.T.conj() @ psi @ Rev for psi in Psi[:2]]
     if R > 2:
         idx = np.angle(Phi[0].diagonal()).argsort()
         Phi = [phi[idx] for phi in Phi]
         for r in range(2, R):
             pair = [Psi[0], Psi[r]]
-            Rev = la.eig(*pair)[1]
+            Rev = eig(*pair)[1]
             newPhi = [Rev.T.conj() @ psi @ Rev
                       for psi in pair]
             idx = np.angle(newPhi[0].diagonal()).argsort()
@@ -911,7 +923,7 @@ def gevdpair(Psi: list) -> list:
     return Phi
 
 
-def sfPhi(Phi: list) -> list:
+def sfPhi(Phi: list) -> tp.List[np.ndarray]:
     """
     Calculate spatial frequencies from
     Shift invariance eigenstructures
@@ -944,7 +956,7 @@ def ute(X: np.ndarray,
         D: int,
         matrix_sse: bool = False,
         kron_sse: bool = False,
-        cheap: bool = True) -> list:
+        cheap: bool = True) -> tp.List[np.ndarray]:
     """
     Unitary Tensor ESPRIT
 
@@ -996,14 +1008,14 @@ def ute(X: np.ndarray,
 
     if (kron_sse ^ matrix_sse):
         Us, sigmas = [truncate(m, D)
-                      for m in np.linalg.svd(unfold(X, R).T,
-                                             full_matrices=False)[:2]]
+                      for m in la.svd(unfold(X, R).T,
+                                      full_matrices=False)[:2]]
         Sigmas = np.diag(sigmas)
         if matrix_sse:
             ISSE = Us @ Sigmas
         else:
             U = [truncate(m, D)
-                 for m in [np.linalg.svd(unfold(X, r))[0]
+                 for m in [la.svd(unfold(X, r))[0]
                            for r in range(R)]]
             U_Kron = kron(U)
             ISSE = U_Kron @ U_Kron.T.conj() @ (Us @ Sigmas)
@@ -1013,13 +1025,13 @@ def ute(X: np.ndarray,
         ISSE = unfold(tmprod(S, U[:R]), R).T
 
     # shift invariance equations
-    Psi = [np.real(np.linalg.pinv(k.real @ ISSE) @ (k.imag @ ISSE))
+    Psi = [np.real(la.pinv(k.real @ ISSE) @ (k.imag @ ISSE))
            for k in K]
 
     return Psi
 
 
-def utepair(Psi: list) -> list:
+def utepair(Psi: list) -> tp.List[np.ndarray]:
     """
     UTE spatial frequency pairing.
 
@@ -1038,7 +1050,7 @@ def utepair(Psi: list) -> list:
 
     Psi_complex = Psi[0] + 1j * Psi[1]
 
-    Phi_complex = la.eig(Psi_complex)[0]
+    Phi_complex = eig(Psi_complex)[0]
     Phi = [Phi_complex.real, Phi_complex.imag]
     if R > 2:
         idx = Phi[0].argsort()
@@ -1046,7 +1058,7 @@ def utepair(Psi: list) -> list:
         for r in range(2, R):
             Psi_complex = Psi[0] + 1j * Psi[r]
 
-            Phi_complex = la.eig(Psi_complex)[0]
+            Phi_complex = eig(Psi_complex)[0]
             idx = Phi_complex.real.argsort()
             Phi.append(Phi_complex.imag[idx])
 
@@ -1100,9 +1112,7 @@ def estDOAs(mu: tp.Union[list, np.ndarray]) -> np.ndarray:
 def stmlsvd(T: np.ndarray,
             size_core: tp.Union[int, list, None] = None,
             perm: tp.Union[list, np.ndarray, None] = None,
-            **varargin: bool) -> tp.Tuple[np.ndarray,
-                                          np.ndarray,
-                                          np.ndarray]:
+            **varargin: bool) -> tp.List[np.ndarray]:
     """
     Sequentially truncated Multilinear SVD.
 
@@ -1117,7 +1127,6 @@ def stmlsvd(T: np.ndarray,
     **varargin : bool
         LargeScale: use eigendecomposition for SVD
         FullSVD: use full SVD
-        Fast: only compute largest singular values (overrides FullSVD)
 
     Returns
     -------
@@ -1147,18 +1156,18 @@ def stmlsvd(T: np.ndarray,
             Sp = unfold(S, p)
             SHS = Sp @ Sp.conj().T
             if usefull:
-                ev, U[p] = la.eig(SHS)
+                ev, U[p] = eig(SHS)
                 U[p] = U[p][:, : size_core[p]]
                 sv[p] = np.sqrt(abs(ev[: size_core[p]]))
             else:
                 ev, U[p] = [truncate(m, size_core[p])
-                            for m in np.linalg.eig(SHS)]
+                            for m in la.eig(SHS)]
                 sv[p] = np.sqrt(abs(ev))
             S = tmprod(S, U[p].conj().T, p)
     else:
         for p in perm:
-            U[p], sv[p] = np.linalg.svd(unfold(S, p),
-                                        full_matrices=usefull)[:2]
+            U[p], sv[p] = la.svd(unfold(S, p),
+                                 full_matrices=usefull)[:2]
             U[p] = U[p][:, :size_core[p]]
             sv[p] = sv[p][: size_core[p]]
             S = tmprod(S, U[p].conj().T, p)
@@ -1167,9 +1176,7 @@ def stmlsvd(T: np.ndarray,
 
 def tmlsvd(T: np.ndarray,
            size_core: tp.Union[None, list, np.ndarray] = None,
-           **varargin: bool) -> tp.Tuple[np.ndarray,
-                                         np.ndarray,
-                                         np.ndarray]:
+           **varargin: bool) -> tp.List[np.ndarray]:
     """
     Truncated multilinear SVD.
 
@@ -1203,27 +1210,27 @@ def tmlsvd(T: np.ndarray,
         Sp = [unfold(T, n) for n in range(N)]
         SHS = [s @ s.T.conj() for s in Sp]
         if usefull:
-            ev, U = zip(*[la.eig(s) for s in SHS])
+            ev, U = zip(*[eig(s) for s in SHS])
             sv = [np.sqrt(abs(e[:size])) for e, size in zip(ev, size_core)]
             U = [u[:, :size] for u, size in zip(U, size_core)]
         else:
-            ev, U = zip*([np.linalg.eig(s) for s in SHS])
+            ev, U = zip*([la.eig(s) for s in SHS])
             ev = [truncate(e) for e in ev]
             U = [truncate(u) for u in U]
             sv = [np.sqrt(abs(ev))]
     else:
         if usefull:
-            U, sv = zip(*[np.linalg.svd(unfold(T, n),
-                                        full_matrices=usefull,
-                                        lapack_driver="gesvd")[:2]
+            U, sv = zip(*[la.svd(unfold(T, n),
+                                 full_matrices=usefull,
+                                 lapack_driver="gesvd")[:2]
                           for n in range(N)])
             U = [u[:, :size] for u, size in zip(U, size_core)]
             sv = [s[:size] for s, size in zip(sv, size_core)]
         else:
-            U, sv = zip(*[np.linalg.svd(unfold(T, n),
-                                        full_matrices=False)[:2]
+            U, sv = zip(*[la.svd(unfold(T, n),
+                                 full_matrices=False)[:2]
                           for n, size in zip(range(N), size_core)])
-    return (U, sv)
+    return U, sv
 
 
 def estcore(T: np.ndarray,
@@ -1258,7 +1265,8 @@ def estcore(T: np.ndarray,
 # %% Canonical Polyadic Decomposition
 
 
-def ampcpd(Y: np.ndarray, F: list, normcols: bool = False) -> np.ndarray:
+def ampcpd(Y: np.ndarray, F: list,
+           normcols: bool = False) -> np.ndarray:
     """
     Calculate CPD component amplitudes.
 
@@ -1285,11 +1293,8 @@ def ampcpd(Y: np.ndarray, F: list, normcols: bool = False) -> np.ndarray:
     return np.array([(Y.ravel() / g.ravel()).sum() for g in G])
 
 
-def cpdgevd(T: np.ndarray,
-            R: int,
-            normcols: bool = False) -> tp.Tuple[np.array,
-                                                np.array,
-                                                np.array]:
+def cpdgevd(T: np.ndarray, R: int,
+            normcols: bool = False) -> tp.List[np.array]:
     """
     Canonical Polyadic Decomposition via GEVD (CPD-GEVD).
 
@@ -1313,23 +1318,19 @@ def cpdgevd(T: np.ndarray,
 
     """
     U, S = stmlsvd(T, (R, R, np.max((R, 2))))[:2]
-    R = la.eig(S[:, :, 0].T, S[:, :, 1].T)[1]
+    R = eig(S[:, :, 0].T, S[:, :, 1].T)[1]
 
     F23 = unfold(T, 0).T @ U[0].conj() @ R
-    F = [U[0] @ np.linalg.inv(R.T)] + lskrf(F23, T.shape[1])
+    F = [U[0] @ la.inv(R.T)] + lskrf(F23, T.shape[1])
 
     if normcols:  # normalize columns
         F = [colnorm(f) for f in F]
     return F
 
 
-def cpdgevd2(
-    T: np.ndarray,
-    R: int,
-    normcols: bool = False,
-    thirdonly: bool = False) -> tp.Tuple[np.array,
-                                         np.array,
-                                         np.array]:
+def cpdgevd2(T: np.ndarray, R: int,
+             normcols: bool = False,
+             thirdonly: bool = False) -> tp.List[np.array]:
     """
     Canonical Polyadic Decomposition via symmetric GEVD.
 
@@ -1353,69 +1354,26 @@ def cpdgevd2(
 
     """
     U, S = stmlsvd(T, (R, R, np.max((R, 2))))[:2]
-    L, R = la.eig(S[:, :, 0], S[:, :, 1], left=True)[1:]
+    # C = R
+    L, R = eig(S[:, :, 0], S[:, :, 1], left=True)[1:]
 
     T = [None] * 3
     T[2] = tmprod(S, [L.T.conj(), R.T]).diagonal()
+    # T[2] = np.stack([np.diagonal(L.T.conj() @ S[:, :, r] @ R)
+    #                  for r in range(C)])
+    # T[2] = unfold(S, 2) @ kron([L.conj(), R])[:, ::C+1]
+    # T[2] = unfold(S, 2) @ la.pinv(kr([la.inv(L.T.conj()), la.inv(R.T)])).T
     if thirdonly:
         return U[2] @ T[2]
-    T[:2] = [np.linalg.inv(lr) for lr in (L.T.conj(), R.T)]
+    T[:2] = [la.inv(lr) for lr in (L.T.conj(), R.T)]
     F = [u @ t for u, t in zip(U, T)]
     if normcols:  # normalize columns
         F = [colnorm(f) for f in F]
     return F
 
 
-def cpdsevd(T: np.ndarray,
-            R: int,
-            normcols: bool = False) -> tp.Tuple[np.array,
-                                                np.array,
-                                                np.array]:
-    """
-    Canonical polyadic decomposition via Singular
-    and Eigenvalue decomposition (CPD-S/EVD).
-
-    Don't use this, probably very imprecise in most cases.
-
-    Parameters
-    ----------
-    T : NumPy array
-        Tensor.
-    R : int
-        Rank.
-    normcols : bool, optional
-        Normalize columns. The default is False.
-
-    Returns
-    -------
-    list (of NumPy arrays)
-        Estimated factor matrices.
-    """
-    U, S = stmlsvd(T, (R, R, 2))[:2]
-    S_0 = S[:, :, 0]
-    S_v = np.vstack((S_0, S[:, :, 1]))
-    U_v = np.linalg.svd(S_v, full_matrices=False)[0]
-    U_1 = U_v[:R, :]
-    U_2 = U_v[R: (2 * R), :]
-
-    R_1 = U_1.conj().T @ U_1
-    R_2 = U_1.conj().T @ U_2
-
-    d, E = la.eig(R_2 @ np.linalg.inv(R_1))
-
-    T_temp = np.linalg.inv(R_1) @ E
-
-    T = [U_1 @ T_temp]
-    T.append((np.linalg.pinv(T[0]) @ S_0).T)
-    T.append(unfold(S, 2) @ (np.linalg.pinv(kr(T))).T)
-
-    F = [U[n] @ T[n] for n in range(len(U))]
-    if normcols:  # normalize columns
-        F = [colnorm(f) for f in F]
-    return F
-
-
-def lskrf(K: np.ndarray, M: tp.Union[int, list, np.ndarray]) -> list:
+def lskrf(K: np.ndarray,
+          M: tp.Union[int, list, np.ndarray]) -> tp.List[np.ndarray]:
     """
     Least squares Khatri-Rao factorization.
 
@@ -1434,12 +1392,41 @@ def lskrf(K: np.ndarray, M: tp.Union[int, list, np.ndarray]) -> list:
     """
     I, R = K.shape
     if isinstance(M, int):
-        N = 2
         M = [M, I // M]
-    else:
-        N = len(M)
+    N = len(M)
 
     T = [np.reshape(K.T[r], M) for r in range(R)]
     u, s = zip(*[stmlsvd(t, 1)[:2] for t in T])
     S = np.diagflat(s).astype(complex) ** (1 / N)
     return [np.squeeze(a).T @ S for a in list(zip(*u))]
+
+
+def htkrf(K: np.ndarray,
+          M: tp.Union[int, list, np.ndarray]) -> tp.List[np.ndarray]:
+    """
+    Hierarchical Tensor Khatri-Rao factorization
+
+    Parameters
+    ----------
+    K : NumPy array
+        Khatri-Rao product.
+    M : tp.Union[int, list, np.ndarray]
+        Size of first dimension or list
+        of sizes (of first dimension).
+
+    Returns
+    -------
+    list (of NumPy arrays)
+        Factor matrices.
+    """
+    N = len(M)
+    F = []
+    C = K.shape[1]
+    for n in range(N - 1):
+        T = fold(K, [[0, 1], 2], [M[n], np.prod(M[(n+1):]), C])
+        U, S = stmlsvd(T, C, np.argsort(T.shape)[::-1])[:2]
+        R, L = eig(S[:, :, 0], S[:, :, 1], left=True)[1:]
+        F.append(np.einsum(tmprod(T, R @ U[1].T.conj(), 1), [0, 1, 2], [0, 2]))
+        K = np.einsum(tmprod(T, L @ U[0].T.conj(), 0), [0, 1, 2], [1, 2])
+    F.append(K)
+    return F
