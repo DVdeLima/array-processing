@@ -52,6 +52,7 @@ __all__ = [
 import itertools as it
 
 import numpy as np
+import numpy.linalg as la
 import typing as tp
 
 from scipy.stats import gmean
@@ -81,8 +82,8 @@ def colnorm(X: np.ndarray) -> np.ndarray:
 
     """
     if X.ndim == 1:
-        return X / np.linalg.norm(X)
-    return X @ np.diag(1 / np.linalg.norm(X, axis=0))
+        return X / la.norm(X)
+    return X @ np.diag(1 / la.norm(X, axis=0))
 
 
 def noisy(M: np.ndarray, SNR: float = 0.0) -> np.ndarray:
@@ -106,10 +107,7 @@ def noisy(M: np.ndarray, SNR: float = 0.0) -> np.ndarray:
     N = np.random.randn(*size_mat)
     if np.iscomplex(M).any():
         N = N + 1j * np.random.randn(*size_mat)
-    scale = np.linalg.norm(M,
-                           "fro") * (10 ** (-SNR
-                                            / 20)) / np.linalg.norm(N,
-                                                                    "fro")
+    scale = la.norm(M, 'fro') * (10 ** (-SNR / 20)) / la.norm(N, 'fro')
     N *= scale
     M = M + N
     return (M, N)
@@ -160,22 +158,54 @@ def lskrf(K: np.ndarray,
     list (of NumPy arrays)
         Factor matrices.
     """
-    I, C = K.shape
+    R, C = K.shape
     if isinstance(M, int):
-        M = [M, I // M]
+        M = [M, R // M]
     N = len(M)
     F = []
     for n in range(N - 1):
-        abT = [np.reshape(K[:, c], [M[n], np.prod(M[(n + 1):])])
+        FnK = [np.reshape(K[:, c], [M[n], np.prod(M[(n + 1):])])
                for c in range(C)]
-        U, s, VH = zip(*[np.linalg.svd(m, full_matrices=False) for m in abT])
-        u = [u[:, 0] for u in U]
-        v = [vH[0] for vH in VH]
-        S = np.diagflat([np.sqrt(ess[0]) for ess in s])
-        F.append(np.stack(u, axis=1) @ S)
-        K = np.stack(v, axis=1).conj() @ S
+        U, s, V = zip(*[la.svd(m, full_matrices=False) for m in FnK])
+        S = np.diagflat([ess[0] ** 0.5 for ess in s])
+        U = np.stack([u[:, 0] for u in U], axis=1)
+        V = np.stack([v[0] for v in V], axis=1)
+        F.append(U @ S)
+        K = V @ S
     F.append(K)
     return F
+
+
+def vkrf(k: np.ndarray, M: tp.Union[int, list]) -> list:
+    """
+    Vector Khatri-Rao factorization
+
+    Parameters
+    ----------
+    k : np.ndarray
+        DESCRIPTION.
+    M : tp.Union[int, list]
+        DESCRIPTION.
+
+    Returns
+    -------
+    list
+        DESCRIPTION.
+
+    """
+    R = len(k)
+    if isinstance(M, int):
+        M = [M, R // M]
+    N = len(M)
+    f = []
+    for n in range(N-1):
+        K = k.reshape(M[n], np.prod(M[n+1:]))
+        u, s, vh = la.svd(K, full_matrices=False)
+        s = (s[0] ** 0.5)
+        f.append(u[:, 0] * s)
+        k = vh[0] * s
+    f.append(k)
+    return f
 
 
 # %% Preprocessing
@@ -200,7 +230,7 @@ def lra(X: np.ndarray,
     """
     if R is None:
         R = min(X.shape)
-    U, s, VH = np.linalg.svd(X, full_matrices=False)
+    U, s, VH = la.svd(X, full_matrices=False)
     return U[:, :R] @ np.diag(s[:R]) @ VH[:R]
 
 
@@ -407,13 +437,13 @@ def esprit1D(X: np.ndarray,
     if X.ndim == 2:  # matrix
         N = X.shape[1]  # no. cols
         if N > D:
-            Us = np.linalg.svd(X, full_matrices=False)[0][:, :D]
-            Psi = np.linalg.pinv(Us[:-1]) @ Us[1:]
-            Phi = np.linalg.eigvals(Psi)
+            Us = la.svd(X, full_matrices=False)[0][:, :D]
+            Psi = la.pinv(Us[:-1]) @ Us[1:]
+            Phi = la.eigvals(Psi)
         elif N == D:
-            if (np.linalg.norm(X, axis=0) == np.ones(D)).all():
-                Psi = np.linalg.pinv(X[:-1]) @ X[1:]
-                Phi = np.linalg.eigvals(Psi)
+            if (la.norm(X, axis=0) == np.ones(D)).all():
+                Psi = la.pinv(X[:-1]) @ X[1:]
+                Phi = la.eigvals(Psi)
             else:
                 Phi = X[1] / X[0]
     else:
@@ -441,7 +471,7 @@ def sort_sf(mu: np.ndarray, mu_hat: np.ndarray) -> tp.Tuple[np.ndarray, float]:
     """
     D = len(mu)
     perms = list(it.permutations(range(D)))
-    e = np.array([np.linalg.norm(mu - mu_hat[p,]) ** 0.5 for p in perms])
+    e = np.array([la.norm(mu - mu_hat[p,]) ** 0.5 for p in perms])
     idx = e.argmin()
     return (mu_hat[perms[idx],], e[idx])
 
@@ -472,7 +502,7 @@ def aic(X: np.ndarray) -> tp.Union[int, tp.Tuple[int, np.ndarray, np.ndarray]]:
     M, N = X.shape
     R = np.cov(X)
 
-    evs = np.linalg.eigvals(R)[::-1]
+    evs = la.eigvals(R)[::-1]
 
     k = np.arange(M)
     K = 2 * k * (2 * M - k)
@@ -517,7 +547,7 @@ def eft(X: np.ndarray,
     M, N = X.shape
     R = np.cov(X)
 
-    evs = np.linalg.eigvals(R)
+    evs = la.eigvals(R)
     if q is None:
         q = np.exp(
             np.sqrt(
