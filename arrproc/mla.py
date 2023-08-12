@@ -51,6 +51,7 @@ __all__ = [
     "colnorm",
     "kron",
     "kr",
+    "kron2kr",
     "unfold",
     "fold",
     "tmprod",
@@ -71,8 +72,8 @@ __all__ = [
     "ste",
     "gevdpair",
     "ute",
-    "utepair",
-    "sfcheck",
+    "ute_pair",
+    "sf_check",
     "estDOAs",
     "stmlsvd",
     "tmlsvd",
@@ -86,11 +87,11 @@ __all__ = [
 
 import numpy as np
 import numpy.linalg as la
-from scipy.linalg import eig
 import typing as tp
 
 # %% Load individual functions
 
+from scipy.linalg import eig
 from itertools import permutations
 
 # %% Debug modules
@@ -102,8 +103,7 @@ from itertools import permutations
 
 
 def frob(X: np.ndarray,
-         squared: bool = False,
-         axis: tp.Union[int, None] = None) -> float:
+         squared: bool = False) -> float:
     """
     Frobenius norm.
 
@@ -113,7 +113,7 @@ def frob(X: np.ndarray,
         Vector or matrix or tensor.
     squared : bool, optional
         Return squared Frobenius norm. The default is False.
-    axis : tp.Union[int, None], optional
+    axis : tp.Optional[int], optional
         Axis along which the norm is calculated. The default is None.
 
     Returns
@@ -121,8 +121,6 @@ def frob(X: np.ndarray,
     float
         Frobenius norm.
     """
-    if isinstance(axis, int):
-        return [frob(x, squared) for x in unfold(X, axis)]
     frob2 = (X * X.conj()).real.sum()  # squared Frob. norm
     if squared:
         return frob2
@@ -149,12 +147,11 @@ def colnorm(X: np.ndarray) -> np.ndarray:
     """
     N = X.ndim
     if N == 1:
-        return X / frob(X)
+        return X / la.norm(X)
     elif N == 2:
-        return X @ np.diag(1 / np.array(frob(X, axis=1)))
+        return X @ np.diagflat(1 / la.norm(X, axis=0))
     else:
-        D = np.diag(1 / np.array(frob(X, axis=(N - 1))))
-        return tmprod(X, D, N - 1)
+        return fold(colnorm(unfold(X, N-1)), N-1, [*X.shape])
 
 
 def oprod(F: list) -> np.ndarray:
@@ -168,13 +165,13 @@ def oprod(F: list) -> np.ndarray:
 
     Returns
     -------
-    TYPE
-        DESCRIPTION.
+    NumPy array
+        Outer product.
     """
     N = [f.ndim for f in F]
     Nacc = [0] + [sum(N[:n]) for n in range(1, len(F) + 1)]
-    modes = list(range(Nacc[-1]))
-    modes = [modes[Nacc[m]: Nacc[m+1]] for m in range(len(F))]
+    modelist = list(range(Nacc[-1]))
+    modes = [modelist[Nacc[m]: Nacc[m+1]] for m in range(len(F))]
     operands = [comb for pair in zip(F, modes) for comb in pair]
     return np.einsum(*operands, range(sum(N)))
 
@@ -237,9 +234,27 @@ def kr(F: list) -> np.ndarray:
     return np.einsum(*operands, range(N+1)).reshape(kr_shape)
 
 
+def kron2kr(C: int) -> np.array:
+    """
+    Kronecker to Khatri-Rao product selection matrix.
+
+    Parameters
+    ----------
+    C : int
+        No. of columns of Khatri-Rao product.
+
+    Returns
+    -------
+    NumPy array
+        Kronecker to Khatri-Rao product selection matrix.
+
+    """
+    return np.eye(C ** 2)[::C].T
+
+
 def unfold(T: np.ndarray,
            modes_left: tp.Union[int, list] = 0,
-           modes_right: tp.Union[list, None] = None):
+           modes_right: tp.Optional[list] = None):
     """
     Returns mode-unfolding of tensor.
 
@@ -379,10 +394,12 @@ def eyeNR(N: int, R: int) -> np.ndarray:
     NumPy array
         Identity tensor.
     """
+    if R == 1:
+        return 1
     if N < 3:
-        return np.eye(R)
+        return np.eye(R, dtype=int)
     eye = np.zeros([R] * N, int)
-    eye[tuple(np.arange(R) for r in range(R))] = 1
+    eye[tuple(np.arange(R) for _ in range(N))] = 1
     return eye
 
 
@@ -393,7 +410,7 @@ def cpdgen(F: list, opt: bool = False) -> np.ndarray:
     Parameters
     ----------
     F : list
-        DESCRIPTION.
+        Factor matrices.
     opt : bool, optional
         Attempt path optimization. The default is False.
         *Possible* gain in speed at the cost of greater
@@ -404,10 +421,12 @@ def cpdgen(F: list, opt: bool = False) -> np.ndarray:
     NumPy array
         Generator tensor.
     """
-    N = len(F)
-    modes = [[n, N] for n in range(N)]
-    operands = [comb for pair in zip(F, modes) for comb in pair]
-    return np.einsum(*operands, range(N))
+    if np.all([f.ndim == 2 for f in F]):
+        N = len(F)
+        modes = [[n, N] for n in range(N)]
+        operands = [comb for pair in zip(F, modes) for comb in pair]
+        return np.einsum(*operands, range(N))
+    return tmprod(F[0], F[1:])
 
 
 def eyeNL(N: int, L: list) -> np.ndarray:
@@ -471,7 +490,7 @@ def estSNR(X0: np.ndarray, X: np.ndarray) -> np.float64:
     float
         Estimated SNR.
     """
-    return 20 * np.log10(frob(X0) / frob(X - X0))
+    return 20 * np.log10(la.norm(X0) / la.norm(X - X0))
 
 
 def noisy(T: np.ndarray,
@@ -500,14 +519,14 @@ def noisy(T: np.ndarray,
             1j * np.random.randn(*tensor_shape)
     else:
         N = np.random.randn(*tensor_shape)
-    scale = frob(T) * (10 ** (-SNR / 20)) / frob(N)
+    scale = la.norm(T) * (10 ** (-SNR / 20)) / la.norm(N)
     N *= scale
     T = T + N
-    return (T, N)
+    return T, N
 
 
 def truncate(M: np.ndarray,
-             R: int,
+             R: tp.Union[int, list],
              axis: int = 1) -> np.ndarray:
     """
     Truncate a matrix or vector.
@@ -519,7 +538,7 @@ def truncate(M: np.ndarray,
     R : int
         Rank.
     axis : int, optional
-        Axis for trunction. The default is 1 (columns).
+        Axis for trunction. The default is 1 (columnwise).
 
     Returns
     -------
@@ -528,13 +547,11 @@ def truncate(M: np.ndarray,
 
     """
     N = M.ndim
-    if N == 1:
-        return M[:R]
-    elif N == 2:
-        if axis:
-            return M.T[:R].T
-        else:
-            return M[:R]
+    if isinstance(R, list):
+        return M[:R[0], :R[1]]
+    if axis and N == 2:
+        return M[:, :R]
+    return M[:R]
 
 # %% Preprocessing
 
@@ -739,7 +756,8 @@ def sps(X: np.ndarray, L: int = 2, expanded: bool = False) -> np.ndarray:
 # %% R-D array processing
 
 
-def una(M: tp.Union[int, list, np.ndarray], mu: np.ndarray) -> np.ndarray:
+def una(M: tp.Union[int, list, np.ndarray],
+        mu: np.ndarray) -> np.ndarray:
     """
     Uniform N-dimensional Array.
 
@@ -758,13 +776,11 @@ def una(M: tp.Union[int, list, np.ndarray], mu: np.ndarray) -> np.ndarray:
     NumPy array
         List of steering matrices (NumPy array).
     """
-    if type(M) is int:
-        deltaM = np.arange(1 - M, M, 2) / 2
-        A = np.exp(1j * np.outer(deltaM, mu))
-    else:
-        deltaM = [np.arange(1 - m, m, 2) / 2 for m in M]
-        A = [np.exp(1j * np.outer(d, m)) for d, m in zip(deltaM, mu)]
-    return A
+    if isinstance(M, int):
+        deltaM = np.array([n/2 for n in range(1 - M, M, 2)])
+        return np.exp(1j * np.outer(deltaM, mu))
+    deltaM = [np.array([n/2 for n in range(1 - m, m, 2)]) for m in M]
+    return [np.exp(1j * np.outer(d, m)) for d, m in zip(deltaM, mu)]
 
 
 def uxa(M: tp.Union[int, list],
@@ -808,14 +824,12 @@ def uxa(M: tp.Union[int, list],
 
     if R == 1:
         mu = np.pi * np.sin(az)
-    else:
-        mu = [np.pi * np.cos(az) * np.sin(el)]
-        mu.append(np.pi * np.sin(az) * np.sin(el))
+        return una(M, mu), mu
+    mu = [np.pi * np.cos(az) * np.sin(el)]
+    mu.append(np.pi * np.sin(az) * np.sin(el))
     if R == 3:
         mu.append(np.pi * np.cos(el))
-    A = una(M, mu)
-
-    return (A, mu)
+    return una(M, mu), mu
 
 
 def ste(X: np.ndarray,
@@ -1031,7 +1045,7 @@ def ute(X: np.ndarray,
     return Psi
 
 
-def utepair(Psi: list) -> tp.List[np.ndarray]:
+def ute_pair(Psi: list) -> tp.List[np.ndarray]:
     """
     UTE spatial frequency pairing.
 
@@ -1065,9 +1079,9 @@ def utepair(Psi: list) -> tp.List[np.ndarray]:
     return [np.diag(phi) for phi in Phi]
 
 
-def sfcheck(mu: tp.Union[list, np.ndarray],
-            mu_hat: tp.Union[list, np.ndarray]) -> tp.Tuple[np.ndarray,
-                                                            float]:
+def sf_check(mu: tp.Union[list, np.ndarray],
+             mu_hat: tp.Union[list, np.ndarray]) -> tp.Tuple[np.ndarray,
+                                                             float]:
     """
     Check and sort estimated spatial frequencies.
 
@@ -1091,7 +1105,7 @@ def sfcheck(mu: tp.Union[list, np.ndarray],
     if isinstance(mu_hat, (list, tuple)):
         mu_hat = np.stack(mu_hat)
     perms = list(permutations(range(D)))
-    e = [frob(mu - mu_hat[:, perm]) for perm in perms]
+    e = [la.norm(mu - mu_hat[:, perm]) for perm in perms]
     idx = np.argmin(e)
     return mu_hat[:, perms[idx]], e[idx]
 
