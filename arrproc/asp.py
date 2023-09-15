@@ -6,9 +6,11 @@ Array Signal Processing.
 ------------------------
 
 Includes:
+    0. Convenience functions
+        Random ranges (randges)
     1. Basic operations
         Column normalization (colnorm)
-        Add noise to RX matrix (noisy)
+        Add noise to Rx matrix (noisy)
         Root mean square error (rmse)
         Least-Squares Khatri-Rao factorization (lskrf)
     2. Preprocessing
@@ -18,18 +20,23 @@ Includes:
         Spatial smoothing (sps)
         De-sps (desps)
         Multiple denoising (MuDe)
-    3. Beamforming
+    3. Recursive covariance estimation
+        Covariance matrix update (cov_upd)
+        Inverse covariance matrix update (inv_cov_upd)
+        Inverse spectrum update (inv_spec_upd)
+        Recursive Capon update
+    4. Beamforming
         Bartlett's beamformer (bartlett)
         Capon's beamformer (capon)
         Linear predictor beamformer (linear_pred)
         Multiple signal classification (music)
         MUSIC polynomial roots (music_roots)
         MUSIC root selector (root_music)
-    4. Array processing
+    5. Array processing
         Uniform linear array (ula)
         1-D ESPRIT (esprit1D)
         Sort spatial frequencies (sort_sf)
-    5. Model order estimation
+    6. Model order estimation
         Minimum Descriptor Length (mdl)
         Akaike Information Criterion (aic)
         Exponential Fitting Test (eft)
@@ -67,22 +74,79 @@ __all__ = [
 
 # %% Load dependencies
 
-import itertools as it
-
 import numpy as np
 import numpy.linalg as la
 import typing as tp
 
+from itertools import permutations
 from scipy.stats import gmean
+from scipy.signal import find_peaks
 
-# %% Debug modules
 
-# import pdb as ipdb
-# ipdb.set_trace()
+# %% Convenience functions
+
+def min_max(power: np.ndarray,
+            min_power: bool = True) -> np.ndarray:
+    """
+    Min/Max normalization
+
+    Parameters
+    ----------
+    power : NumPy array
+        Data vector.
+
+    Returns
+    -------
+    None.
+
+    """
+    min_power = min(power)
+    max_power = max(power)
+    diff = max_power - min_power
+    if min_power:
+        return (power - min_power) / diff
+    return (power - max_power) / diff
+
+
+def randges(R: int,
+            start: float = -90.0,
+            end: float = 90.0,
+            biased: float = 3.0) -> np.ndarray:
+    """
+    Draw from random ranges for DoA estimation
+
+    Parameters
+    ----------
+    R : int
+        Number of ranges (R > 1).
+    start : float, optional
+        Start of distribution. The default is -90.0.
+    end : float, optional
+        End of distribution. The default is 90.0.
+    biased : float, optional
+        Number of standard deviations in each half
+        range for Normal distribution draw. If set
+        to 0 or False uses Uniform distribution.
+        The default is 3.0.
+
+    Returns
+    -------
+    draw : NumPy array
+        Draw.
+
+    """
+    delta = abs(start - end) / R
+    draw = start + delta * np.arange(R)
+    if biased:
+        draw += delta * (1 + np.random.randn(R) / biased) / 2
+        draw[draw < start] = start
+        draw[draw > end] = end
+    else:
+        draw += delta * np.random.rand(R)
+    return draw
 
 
 # %% Basic operations
-
 
 def colnorm(X: np.ndarray) -> np.ndarray:
     """
@@ -228,7 +292,6 @@ def vkrf(k: np.ndarray,
 
 
 # %% Preprocessing
-
 
 def lra(X: np.ndarray,
         R: tp.Union[int, None] = None) -> np.ndarray:
@@ -402,8 +465,117 @@ def MuDe(X: np.ndarray, D: int, L: int = 2) -> np.ndarray:
     return desps(Z, L)
 
 
-# %% Beamforming
+# %% Recursive cov. est.
 
+def tri(A: np.ndarray) -> np.ndarray:
+    """
+    Triangular (re)conditioning.
+
+    Parameters
+    ----------
+    A : NumPy array
+        Input (Hermitian) matrix.
+
+    Returns
+    -------
+    NumPy array
+        Reconditioned matrix.
+
+    """
+    return (A + A.conj().T) / 2
+
+
+def cov_upd(covariance: np.ndarray,
+            x: np.ndarray,
+            forget: float = 0.8) -> np.ndarray:
+    """
+    Covariance matrix update
+
+    Parameters
+    ----------
+    covariance : NumPy array
+        Previous covariance matrix.
+    x : NumPy array
+        Current data vector.
+    forget : float, optional
+        Forgetting factor. The default is 0.8.
+
+    Returns
+    -------
+    NumPy array
+        Updated covariance matrix.
+
+    """
+    if x.ndim == 1:
+        return forget * covariance + np.outer(x, x.conj())
+    return forget * covariance + x @ x.T.conj() / x.shape[1]
+
+
+def inv_cov_upd(inv_covariance: np.ndarray,
+                x: np.ndarray,
+                forget: float = 0.8) -> np.ndarray:
+    g = inv_covariance @ x  # a priori Kalman filter gain
+    phi = forget / (forget + x.T.conj() @ g)
+    inv_covariance = inv_covariance / forget \
+        - np.outer(g, g.conj()) * phi / forget ** 2
+    return tri(inv_covariance), g, phi
+
+
+def inv_spec_upd(inv_spectrum: np.ndarray,
+                 g: np.ndarray,
+                 phi: float,
+                 forget: float = 0.8,
+                 F: np.ndarray = None) -> np.ndarray:
+    """
+    Inverse spectrum update
+
+    Parameters
+    ----------
+    inv_spectrum : NumPy array
+        Previous inverse spectrum.
+    g : NumPy array
+        Kalman gain vector.
+    phi : float
+        Scaling factor.
+    forget : float, optional
+        Forgetting factor. The default is 0.8.
+    F : NumPy array, optional
+        Frequency sweep matrix. The default is None.
+
+    Returns
+    -------
+    inv_spectrum: NumPy array
+        Updated inverse spectrum.
+
+    """
+    L = g.shape[0]
+    K = inv_spectrum.shape[0]
+    if F is None:
+        F = ula(L, np.linspace(-np.pi / 2, np.pi / 2, K))
+    phi = phi / (K * (1 - forget))
+    v = F.T.conj() @ g
+    return inv_spectrum / forget - phi * (abs(v) / forget) ** 2
+
+
+def recapon_upd(inv_covariance: np.ndarray,
+                x: np.ndarray,
+                inv_spectrum: np.ndarray,
+                forget: float = 0.8,
+                F: np.ndarray = None) -> tp.Tuple[np.ndarray,
+                                                  np.ndarray]:
+    if F is None:
+        L = x.shape[0]
+        K = 181
+        F = ula(L, np.linspace(-np.pi / 2, np.pi / 2, 181))
+    else:
+        L, K = F.shape
+    inv_covariance, g, phi = inv_cov_upd(x, inv_covariance)
+    # Inv. cov. matrix est. upd.
+    inv_spectrum = inv_spec_upd(inv_spectrum, g, phi, forget, F)
+    return inv_covariance, inv_spectrum
+
+
+# %% Beamforming
 
 def beamformer(X: np.ndarray,
                A: tp.Union[list, np.ndarray] = None) -> list:
@@ -432,7 +604,7 @@ def beamformer(X: np.ndarray,
 
 
 def bartlett(X: np.ndarray,
-             A: tp.Optional[np.ndarray] = None) -> np.ndarray:
+             A: tp.Optional[list] = None) -> np.ndarray:
     """
     Bartlett's (conventional) beamformer
 
@@ -458,7 +630,7 @@ def bartlett(X: np.ndarray,
 
 
 def capon(X: np.ndarray,
-          A: tp.Optional[np.ndarray] = None) -> np.ndarray:
+          A: tp.Optional[list] = None) -> np.ndarray:
     """
     Capon's beamformer
 
@@ -485,7 +657,7 @@ def capon(X: np.ndarray,
 
 
 def linear_pred(X: np.ndarray,
-                A: tp.Optional[np.ndarray] = None,
+                A: tp.Optional[list] = None,
                 u: tp.Optional[int] = None) -> np.ndarray:
     """
     Linear prediction beamformer
@@ -523,8 +695,32 @@ def linear_pred(X: np.ndarray,
                                   for a in A.T]))
 
 
+def find_spec_peak_idxs(spec: np.ndarray,
+                        R: tp.Optional[int] = None) -> np.ndarray:
+    """
+    Returns indexes of spectrum peaks.
+
+    Parameters
+    ----------
+    spec : NumPy array
+        Spectrum.
+    R : int, optional
+        Number of peaks (model order). The default is None.
+
+    Returns
+    -------
+    TYPE
+        DESCRIPTION.
+
+    """
+    peaks = find_peaks(spec)[0]
+    if R is None:
+        return peaks
+    return peaks[np.argsort(spec[peaks])[::-1][:R]]
+
+
 def music(X: np.ndarray, R: int,
-          A: tp.Optional[np.ndarray] = None) -> np.ndarray:
+          A: tp.Optional[list] = None) -> np.ndarray:
     """
     MUSIC beamformer
 
@@ -559,6 +755,26 @@ def music(X: np.ndarray, R: int,
     return -20 * np.log10(beamformer(C, A)).real
 
 
+def minimum_norm(X: np.ndarray, R: int,
+                 A: tp.Optional[list] = None) -> np.ndarray:
+    M, N = X.shape
+    if N == M:
+        if la.norm(X) > (M - R):
+            En = la.eig(X)[1][:, R:]
+            C = En @ np.conj(En.T)
+        else:
+            C = X
+    elif N == M - R:
+        C = X @ np.conj(X.T)
+    else:
+        Rxx = X @ np.conj(X.T) / N
+        En = la.eig(Rxx)[1][:, R:]
+        C = En @ np.conj(En.T)
+    W = np.zeros((M, M))
+    W[0, 0] = 1.0
+    return -20 * np.log10(beamformer(C @ W @ C, A)).real
+
+
 def music_roots(C: np.ndarray) -> np.ndarray:
     """
     Find roots of MUSIC polynomial
@@ -575,8 +791,8 @@ def music_roots(C: np.ndarray) -> np.ndarray:
     """
     M: int = C.shape[0]
     coefficients: tp.List[np.complex128] = [sum(np.diagonal(C, offset))
-                                            for offset in range(M - 1, -M, -1)]
-    return np.roots(coefficients)
+                                            for offset in range(1-M, M)]
+    return np.roots(coefficients).conj()
 
 
 def pair_roots(roots: np.ndarray) -> tp.List:
@@ -611,9 +827,9 @@ def root_music(X: np.ndarray, R: int) -> tp.List:
     Parameters
     ----------
     roots : NumPy array
-        DESCRIPTION.
+        MUSIC polynomial roots.
     R : int
-        DESCRIPTION.
+        Model order.
 
     Returns
     -------
@@ -634,6 +850,107 @@ def root_music(X: np.ndarray, R: int) -> tp.List:
         roots = music_roots(C)
     return np.array([np.angle(pair[0])
                      for pair in pair_roots(roots)[:R]])
+
+
+def root(X: np.ndarray, R: int) -> np.ndarray:
+    """
+    Calculate Root-MUSIC spatial frequencies
+
+    Parameters
+    ----------
+    X : NumPy array
+        Noise subspace covariance matrix.
+    R : int
+        Model order.
+
+    Returns
+    -------
+    NumPy array
+        Spatial frequencies.
+
+    """
+    return root_music(music_roots(X), R)
+
+
+def mmse(invRxx: np.ndarray, a: np.ndarray,
+         y: tp.Optional[np.ndarray] = None) -> np.ndarray:
+    mmse_estimator = a.T.conj() @ invRxx / (a.T.conj() @ invRxx @ a)
+    if y is None:
+        return mmse_estimator
+    return mmse_estimator @ y
+
+
+# %% Estimate pairing
+
+def binary_seq(R: int, zero: bool = False) -> np.ndarray:
+    """
+    Returns a binary sequence for R bits
+
+    Parameters
+    ----------
+    R : int
+        Number of bits.
+
+    Returns
+    -------
+    seq: NumPy array
+        Binary sequence.
+
+    """
+    seq = np.array([np.array(list(np.binary_repr(n, R))).astype(int)
+                    for n in range(2**R)])
+    if not zero:
+        seq = 1 - 2 * seq
+    return seq
+
+
+def naive_pairing(previous: np.ndarray, current: np.ndarray) -> np.ndarray:
+    """
+    Naïve pairing
+
+    Parameters
+    ----------
+    previous : NumPy array
+        Previous estimates.
+    current : NumPy array
+        Current estimates.
+
+    Returns
+    -------
+    NumPy array
+        Naïve paired current estimates.
+
+    """
+    candidates = tuple(permutations(current))
+    idx_arg_min_pdn = la.norm(candidates - previous, axis=1).argmin()
+    if idx_arg_min_pdn:
+        return candidates[idx_arg_min_pdn]
+    return current
+
+
+def limit_switch(current: np.ndarray,
+                 limit: tp.Optional[float] = None) -> np.ndarray:
+    if limit is None:
+        if np.any(np.abs(current) > np.pi/2):
+            limit = 80
+        else:
+            limit = 1.4
+    R = len(current)
+    above_limit = abs(current) > limit
+    L = len(np.nonzero(above_limit)[0])
+    switch = np.ones((2 ** L, R))
+    if L == 1:
+        switch[:, above_limit] = np.asmatrix([1, -1]).T
+    elif L > 1:
+        ell = 0
+        seq = binary_seq(L)
+        for col, judgement in enumerate(above_limit):
+            if judgement:
+                switch[:, col] = seq[:, ell]
+                ell += 1
+    else:
+        return current
+    return switch @ np.diagflat(current)
 
 
 # %% Array Processing
@@ -701,7 +1018,7 @@ def estimu(A: np.ndarray) -> np.ndarray:
 
 
 def esprit1d(X: np.ndarray,
-             D: tp.Union[int, None] = None) -> np.ndarray:
+             R: int = None) -> np.ndarray:
     """
     One-dimensional ESPRIT.
 
@@ -709,8 +1026,8 @@ def esprit1d(X: np.ndarray,
     ----------
     X : NumPy array
         Input matrix.
-    D : int, optional
-        Model order. Defaults to no. of columns.
+    R : int, optional
+        Model order. If not specified assumed signal subspace was used.
 
     Returns
     -------
@@ -718,51 +1035,34 @@ def esprit1d(X: np.ndarray,
         Spatial frequencies vector
 
     """
-    if X.ndim == 2:  # matrix
-        N = X.shape[1]  # no. cols
-        if N > D:
-            Us = la.svd(X, full_matrices=False)[0][:, :D]
-            Psi = la.pinv(Us[:-1]) @ Us[1:]
-            Phi = la.eigvals(Psi)
-        elif N == D:
-            if (la.norm(X, axis=0) == np.ones(D)).all():
-                Psi = la.pinv(X[:-1]) @ X[1:]
-                Phi = la.eigvals(Psi)
-            else:
-                Phi = X[1] / X[0]
+    if R is None:
+        Us = X
     else:
-        Phi = X[1] / X[0]
-    return np.angle(Phi)
+        Us = la.svd(X, full_matrices=False)[0][:, :R]
+    if Us.ndim == 1:
+        return estimu(Us)
+    Psi = la.pinv(Us[:-1]) @ Us[1:]
+    phi = la.eigvals(Psi)
+    return np.angle(phi)
 
 
 def sort_sf(mu: np.ndarray,
-            mu_hat: np.ndarray) -> tp.Tuple[np.ndarray, float]:
-    """
-    Sort spatial frequences.
-
-    Parameters
-    ----------
-    mu : NumPy array
-        True spatial frequencies.
-    mu_hat : NumPy array
-        Estimated spatial frequencies.
-
-    Returns
-    -------
-    NumPy array
-        Sorted spatial frequencies.
-    Float
-        Error.
-    """
-    D = len(mu)
-    perms = list(it.permutations(range(D)))
-    e = np.array([la.norm(mu - mu_hat[p,]) ** 0.5 for p in perms])
-    idx = e.argmin()
-    return (mu_hat[perms[idx],], e[idx])
+            mu_hat: np.ndarray = None) -> np.ndarray:
+    if mu_hat is None:
+        N, R = mu.shape
+        mu_hat = np.zeros((N, R))
+        mu_hat[0] = mu[0]
+        for n in range(1, N):
+            mu_hat[n] = sort_sf(mu_hat[n-1], mu[n])
+        return mu_hat
+    R = len(mu)
+    perm_list = list(permutations(range(R)))
+    error = la.norm([mu - mu_hat[list(perm)]
+                     for perm in perm_list], axis=1)
+    return mu_hat[list(perm_list[error.argmin()])]
 
 
 # %% Model order estimation
-
 
 def mdl(X: np.ndarray,
         fba: tp.Optional[bool] = False) -> tp.Tuple[int,
@@ -782,7 +1082,7 @@ def mdl(X: np.ndarray,
     -------
     R : int
         Estimated model order (NOT zero-indexed)
-    L: NumPy array
+    L : NumPy array
         Likelihood function
     P : NumPy array
         Penalty function
@@ -815,9 +1115,9 @@ def mdl(X: np.ndarray,
 
 
 def aic(X: np.ndarray,
-        fba: tp.Optional[bool] = False) -> tp.Tuple[int,
-                                                    np.ndarray,
-                                                    np.ndarray]:
+        fba: bool = False) -> tp.Tuple[int,
+                                       np.ndarray,
+                                       np.ndarray]:
     """
     Akaike information criterion model order estimator
 
@@ -832,7 +1132,7 @@ def aic(X: np.ndarray,
     -------
     R : int
         Estimated model order
-    L: NumPy array
+    L : NumPy array
         Likelihood function
     P : NumPy array
         Penalty function
@@ -848,23 +1148,23 @@ def aic(X: np.ndarray,
     if eigenvalues.sum() < 0:
         return 0
 
+    r = np.arange(M)
     if np.any(np.iscomplex(X)):
         if fba:
-            p = [0.5 * r * (2 * M - r + 1) for r in range(M)]
+            P = 0.5 * r * (2 * M - r + 1)
         else:
-            p = [r * (2 * M - r) for r in range(M)]
+            P = r * (2 * M - r)
     else:
         if fba:
-            p = [r * (M + r + 1) for r in range(M)]
+            P = r * (M + r + 1)
         else:
-            p = [r * (2 * M - r + 1) for r in range(M)]
-    P = np.array(p)
+            P = r * (2 * M - r + 1)
 
-    L = np.array([(r - M) * N * np.log(gmean(eigenvalues[r:M])
-                                       / np.mean(eigenvalues[r:M]))
+    L = np.array([(r - M) * N * np.log(gmean(abs(eigenvalues[r:M]))
+                                       / np.mean(abs(eigenvalues[r:M])))
                   for r in range(M)])
     AIC = L + P
-    return np.argmin(AIC) - 1, L, P
+    return np.argmin(AIC), L, P
 
 
 def eft(X: np.ndarray,

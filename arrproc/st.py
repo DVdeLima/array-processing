@@ -7,32 +7,43 @@ Subpace Tracking.
 
 Includes:
     1. Projection-based
-        Projection Approximation Subspace Tracking (PASTupd)
-        PAST via deflation (PASTdupd)
-        Orthogonal PAST (OPASTupd)
-        Fast Constrained PAST (FCPASTupd)
-        Generalized YAST (GYASTupd)
+        Projection Approximation Subspace Tracking (past_upd)
+        PAST via deflation (pastd_upd)
+        Fast Approximate Subpsace Tracking (fast_upd)
+        Orthogonal PAST (opast_upd)
+        Fast Constrained PAST (fcpast_upd)
+        Generalized YAST (gyast_upd)
     2. Power iteration-based
-        Fast Approximate Power Iteration (FAPIupd)
+        Fast Approximate Power Iteration (fapi_upd)
     3. Raileigh quotient-based
-        Fast Rayleigh quotient Adaptive Noise Subspace (FRANSupd)
-        Fast Data Projection Method (FDPMupd)
+        Fast Rayleigh quotient Adaptive Noise Subspace (frans_upd)
+        Fast Data Projection Method (fdpm_upd)
+        Fast and Stable DPM (fsdpm_upd)
 """
 
 # %% Load dependencies
 
 import numpy as np
+import numpy.linalg as la
 import typing as tp
 
-# %% Debug modules
-
-# import pdb as ipdb
-# ipdb.set_trace()
 
 # %% Auxiliary functions
 
+def stripe(M: int, N: int, normalize: bool = True) -> np.ndarray:
+    if M == N:
+        return np.eye(M)
+    if M > N:
+        res = np.vstack((np.tile(np.eye(N, dtype=complex), (M//N, 1)),
+                         np.eye(N, M % N, dtype=complex).T))
+    else:
+        res = stripe(N, M).T
+    if normalize:
+        return res @ np.diagflat(res.sum(axis=0) ** -0.5)
+    return res
 
-def Tri(A: np.ndarray) -> np.ndarray:
+
+def tri(A: np.ndarray) -> np.ndarray:
     """
     Triangular conditioning.
 
@@ -50,11 +61,11 @@ def Tri(A: np.ndarray) -> np.ndarray:
     return (A + A.conj().T) / 2
 
 
-def SVDupd(X: np.ndarray,
-           U: np.ndarray,
-           evs: np.ndarray,
-           ff: float = 0.97) -> tp.Tuple[np.ndarray,
-                                         np.ndarray]:
+def svd_upd(X: np.ndarray,
+            U: np.ndarray,
+            evs: np.ndarray,
+            ff: float = 0.97) -> tp.Tuple[np.ndarray,
+                                          np.ndarray]:
     """
     SVD subspace update.
 
@@ -83,23 +94,22 @@ def SVDupd(X: np.ndarray,
         C = ff * C + np.outer(X, X.conj())
     else:
         C = ff * C + X @ X.conj().T
-    evs, U = np.linalg.eig(C)
+    evs, U = la.eig(C)
     return (U[:, :R], evs[:R])
 
 
 # %% PAST-based
 
-
-def PASTupd(X: np.ndarray,
-            U: np.ndarray,
-            C: np.ndarray,
-            ff: float = 0.97) -> tp.Tuple[np.ndarray,
-                                          np.ndarray]:
+def past_upd(X: np.ndarray,
+             U: np.ndarray,
+             C: np.ndarray,
+             ff: float = 0.97) -> tp.Tuple[np.ndarray,
+                                           np.ndarray]:
     """
     Projection Approximation Subspace Tracking update.
 
     Usage:
-        U, C = PASTupd(X, U, C, ff)
+        U, C = past_upd(X, U, C, ff)
 
     Parameters
     ----------
@@ -121,31 +131,31 @@ def PASTupd(X: np.ndarray,
 
     """
     if X.ndim == 1:
-        y = U.conj().T @ X
+        y = U.T.conj() @ X
         e = X - U @ y
         h = C @ y
         g = h / (ff + y.conj().T @ h)
         U = U + np.outer(e, g.conj())
-        C = Tri(C - np.outer(g, h.conj()))
+        C = tri(C - np.outer(g, h.conj()))
     else:
         Y = U.conj().T @ X
         E = X - U @ Y
         C = ff * C + Y @ Y.conj().T
-        G = np.linalg.inv(C) @ Y
+        G = la.inv(C) @ Y
         U = U + E @ G.conj().T
     return (U, C)
 
 
-def BPASTupd(X: np.ndarray,
-             U: np.ndarray,
-             C: np.ndarray,
-             ff: float = 0.97) -> tp.Tuple[np.ndarray,
-                                           np.ndarray]:
+def bpast_upd(X: np.ndarray,
+              U: np.ndarray,
+              C: np.ndarray,
+              ff: float = 0.97) -> tp.Tuple[np.ndarray,
+                                            np.ndarray]:
     """
     Batch PAST update.
 
     Usage:
-        U, C = PASTupd(X, U, C, ff)
+        U, C = past_upd(X, U, C, ff)
 
     Parameters
     ----------
@@ -165,22 +175,22 @@ def BPASTupd(X: np.ndarray,
     NumPy array
         Updated covariance matrix estimate
     """
-    U, C = PASTupd(X.T[0], U, C, ff)
+    U, C = past_upd(X.T[0], U, C, ff)
     for n in range(1, X.shape[1]):
-        U, C = FAPIupd(X.T[n], U, C, 1.0)
+        U, C = past_upd(X.T[n], U, C, 1.0)
     return (U, C)
 
 
-def PASTdupd(X: np.ndarray,
-             U: np.ndarray,
-             evs: np.ndarray,
-             ff: float = 0.97) -> tp.Tuple[np.ndarray,
-                                           np.ndarray]:
+def pastd_upd(X: np.ndarray,
+              U: np.ndarray,
+              evs: np.ndarray,
+              ff: float = 0.97) -> tp.Tuple[np.ndarray,
+                                            np.ndarray]:
     """
     Deflationary PAST update.
 
     Usage:
-        U, evs = PASTdupd(x, U, evs, ff)
+        U, evs = pastd_upd(x, U, evs, ff)
 
     Parameters
     ----------
@@ -204,7 +214,7 @@ def PASTdupd(X: np.ndarray,
     for d in range(U.shape[1]):
         u = U.T[d]
         y = X.T @ u.conj()
-        evs[d] = ff * evs[d] + (np.linalg.norm(y) ** 2)
+        evs[d] = ff * evs[d] + (la.norm(y) ** 2)
         if X.ndim == 1:
             E = X - u * y
             U[:, d] = u + E * y.conj() / evs[d]
@@ -216,9 +226,9 @@ def PASTdupd(X: np.ndarray,
     return (U, evs)
 
 
-def FASTupd(x: np.ndarray,
-            U: np.ndarray) -> tp.Tuple[np.ndarray,
-                                       np.ndarray]:
+def fast_upd(x: np.ndarray,
+             U: np.ndarray) -> tp.Tuple[np.ndarray,
+                                        np.ndarray]:
     """
     Fast Approximate Subspace Tracking (FAST)
 
@@ -231,9 +241,9 @@ def FASTupd(x: np.ndarray,
 
     Returns
     -------
-    NumPy array
+    U : NumPy array
         Updated subspace estimate.
-    NumPy array (vector)
+    sv : NumPy array (vector)
         Updated singular values.
     """
     if ((x.ndim == 2) & (x.shape[1] > 1)):
@@ -243,7 +253,7 @@ def FASTupd(x: np.ndarray,
         X = None
     a = U.T.conj() @ x
     z = x - U @ a
-    b = np.linalg.norm(z)
+    b = la.norm(z)
     q = z / b
     if X is None:
         E = np.vstack((a, b))
@@ -251,16 +261,16 @@ def FASTupd(x: np.ndarray,
         N = X.shape[1]
         E = np.vstack((np.hstack((U.T.conj() @ X, a)),
                        np.hstack((np.zeros(N), b))))
-    U_E, s_E = np.linalg.svd(E @ E.T.conj(),
-                             hermitian=True)[:2]
+    U_E, s_E = la.svd(E @ E.T.conj(),
+                      hermitian=True)[:2]
     return (np.hstack((U, q)) @ U_E[:, :-1], s_E[:-1])
 
 
-def OPASTupd(x: np.ndarray,
-             U: np.ndarray,
-             C: np.ndarray,
-             ff: float = 0.97) -> tp.Tuple[np.ndarray,
-                                           np.ndarray]:
+def opast_upd(x: np.ndarray,
+              U: np.ndarray,
+              C: np.ndarray,
+              ff: float = 0.97) -> tp.Tuple[np.ndarray,
+                                            np.ndarray]:
     """
     Orthogonal PAST.
 
@@ -285,11 +295,11 @@ def OPASTupd(x: np.ndarray,
     """
     y = U.conj().T @ x
     q = C @ y / ff
-    q2norm2 = np.linalg.norm(q) ** 2
+    q2norm2 = la.norm(q) ** 2
     gamma = 1 / (1 + y.conj().T @ q)
     tau = (1 / np.sqrt(1
-                       + q2norm2 * (np.linalg.norm(x) ** 2
-                                    - np.linalg.norm(y) ** 2))
+                       + q2norm2 * (la.norm(x) ** 2
+                                    - la.norm(y) ** 2))
            - 1) / q2norm2
     p = (U @ (tau * q - gamma * (1 + tau * q2norm2) * y)
          + (1 + tau * q2norm2) * gamma * x)
@@ -298,11 +308,11 @@ def OPASTupd(x: np.ndarray,
     return (U, C)
 
 
-def BOPASTupd(x: np.ndarray,
-              U: np.ndarray,
-              C: np.ndarray,
-              ff: float = 0.97) -> tp.Tuple[np.ndarray,
-                                            np.ndarray]:
+def bopast_upd(x: np.ndarray,
+               U: np.ndarray,
+               C: np.ndarray,
+               ff: float = 0.97) -> tp.Tuple[np.ndarray,
+                                             np.ndarray]:
     """
     Orthogonal PAST.
 
@@ -325,17 +335,17 @@ def BOPASTupd(x: np.ndarray,
         Updated covariance matrix estimate.
 
     """
-    U, C = OPASTupd(x.T[0], U, C, ff)
+    U, C = opast_upd(x.T[0], U, C, ff)
     for n in range(1, x.shape[1]):
-        U, C = OPASTupd(x.T[n], U, C, 1.0)
+        U, C = opast_upd(x.T[n], U, C, 1.0)
     return (U, C)
 
 
-def FCPASTupd(X: np.ndarray,
-              U: np.ndarray,
-              C: np.ndarray,
-              ff: float = 0.97) -> tp.Tuple[np.ndarray,
-                                            np.ndarray]:
+def fcpast_upd(X: np.ndarray,
+               U: np.ndarray,
+               C: np.ndarray,
+               ff: float = 0.97) -> tp.Tuple[np.ndarray,
+                                             np.ndarray]:
     """
     Fast Constrained PAST.
 
@@ -372,11 +382,11 @@ def FCPASTupd(X: np.ndarray,
     return (U, C)
 
 
-def BFCPASTupd(X: np.ndarray,
-               U: np.ndarray,
-               C: np.ndarray,
-               ff: float = 0.97) -> tp.Tuple[np.ndarray,
-                                             np.ndarray]:
+def bfcpast_upd(X: np.ndarray,
+                U: np.ndarray,
+                C: np.ndarray,
+                ff: float = 0.97) -> tp.Tuple[np.ndarray,
+                                              np.ndarray]:
     """
     Batch Fast Constrained PAST.
 
@@ -396,19 +406,19 @@ def BFCPASTupd(X: np.ndarray,
     None.
 
     """
-    U, C = FCPASTupd(X.T[0], U, C, ff)
+    U, C = fcpast_upd(X.T[0], U, C, ff)
     for n in range(1, X.shape[1]):
-        U, C = FCPASTupd(X.T[n], U, C, 1.0)
+        U, C = fcpast_upd(X.T[n], U, C, 1.0)
     return (U, C)
 
 
-def GYASTupd(x: np.ndarray,
-             U: np.ndarray,
-             P: np.ndarray,
-             sigma_n: float,
-             ff: float = 0.97) -> tp.Tuple[np.ndarray,
-                                           np.ndarray,
-                                           float]:
+def gyast_upd(x: np.ndarray,
+              U: np.ndarray,
+              P: np.ndarray,
+              sigma_n: float,
+              ff: float = 0.97) -> tp.Tuple[np.ndarray,
+                                            np.ndarray,
+                                            float]:
     """
     Generalized YAST.
 
@@ -438,7 +448,7 @@ def GYASTupd(x: np.ndarray,
     z = sigma * y
     gamma = (ff * sigma_n**2 + sigma**2).real
     P2 = np.row_stack((np.column_stack((P1, z)), np.append(z.conj(), gamma)))
-    e, Q = np.linalg.eig(P2)
+    e, Q = la.eig(P2)
     q_n = Q[:, e.real.argmin()]
     q = q_n[:D]
     r = q_n[-1]
@@ -456,13 +466,13 @@ def GYASTupd(x: np.ndarray,
     return U, P, sigma_n
 
 
-def BGYASTupd(x: np.ndarray,
-              U: np.ndarray,
-              P: np.ndarray,
-              sigma_n: float,
-              ff: float = 0.97) -> tp.Tuple[np.ndarray,
-                                            np.ndarray,
-                                            float]:
+def bgyast_upd(x: np.ndarray,
+               U: np.ndarray,
+               P: np.ndarray,
+               sigma_n: float,
+               ff: float = 0.97) -> tp.Tuple[np.ndarray,
+                                             np.ndarray,
+                                             float]:
     """
     Batch GYAST.
 
@@ -484,20 +494,19 @@ def BGYASTupd(x: np.ndarray,
     None.
 
     """
-    U, P, sigma_n = GYASTupd(x.T[0], U, P, sigma_n, ff)
+    U, P, sigma_n = gyast_upd(x.T[0], U, P, sigma_n, ff)
     for n in range(1, x.shape[1]):
-        U, P, sigma_n = GYASTupd(x.T[n], U, P, sigma_n, 1.0)
+        U, P, sigma_n = gyast_upd(x.T[n], U, P, sigma_n, 1.0)
     return U, P, sigma_n
 
 
 # %% Power Iteration-based
 
-
-def FAPIupd(x: np.ndarray,
-            U: np.ndarray,
-            C: np.ndarray,
-            ff: float = 0.97) -> tp.Tuple[np.ndarray,
-                                          np.ndarray]:
+def fapi_upd(x: np.ndarray,
+             U: np.ndarray,
+             C: np.ndarray,
+             ff: float = 0.97) -> tp.Tuple[np.ndarray,
+                                           np.ndarray]:
     """
     Fast Approximate Power Iteration.
 
@@ -521,8 +530,8 @@ def FAPIupd(x: np.ndarray,
     h = C @ y
     g = h / (ff + y.conj().T @ h)
 
-    g2norm2 = np.linalg.norm(g) ** 2
-    epsilon2 = np.linalg.norm(x) ** 2 - np.linalg.norm(y) ** 2
+    g2norm2 = la.norm(g) ** 2
+    epsilon2 = la.norm(x) ** 2 - la.norm(y) ** 2
     tau = epsilon2 / (1 + epsilon2 * g2norm2 + np.sqrt(1 + epsilon2 * g2norm2))
     eta = 1 - tau * g2norm2
 
@@ -536,11 +545,11 @@ def FAPIupd(x: np.ndarray,
     return (U, C)
 
 
-def BFAPIupd(x: np.ndarray,
-             U: np.ndarray,
-             C: np.ndarray,
-             ff: float = 0.97) -> tp.Tuple[np.ndarray,
-                                           np.ndarray]:
+def bfapi_upd(x: np.ndarray,
+              U: np.ndarray,
+              C: np.ndarray,
+              ff: float = 0.97) -> tp.Tuple[np.ndarray,
+                                            np.ndarray]:
     """
     Batch FAPI.
 
@@ -560,18 +569,17 @@ def BFAPIupd(x: np.ndarray,
     None.
 
     """
-    U, C = FAPIupd(x.T[0], U, C, ff)
+    U, C = fapi_upd(x.T[0], U, C, ff)
     for n in range(1, x.shape[1]):
-        U, C = FAPIupd(x.T[n], U, C, 1.0)
+        U, C = fapi_upd(x.T[n], U, C, 1.0)
     return (U, C)
 
 
 # %% Rayleigh quotient-based
 
-
-def FRANSupd(x: np.ndarray,
-             U: np.ndarray,
-             mu: tp.Union[float, None] = None) -> np.ndarray:
+def frans_upd(x: np.ndarray,
+              U: np.ndarray,
+              mu: float = None) -> np.ndarray:
     """
     Fast Rayleigh quotient-based Adaptive Noise Subpace.
 
@@ -581,7 +589,7 @@ def FRANSupd(x: np.ndarray,
         Observation vector.
     U : NumPy array
         Current subspace estimate.
-    mu : tp.Union[float, None], optional
+    mu : float, optional
         Forgetting factor. The default is None.
 
     Returns
@@ -592,30 +600,30 @@ def FRANSupd(x: np.ndarray,
     """
     if x.ndim == 1:
         if mu is None:
-            mu = np.linalg.norm(x) ** -2
+            mu = la.norm(x) ** -2
         y = U.conj().T @ x
         T = U + mu * np.outer(x, y.conj())
-        y2norm2 = np.linalg.norm(y) ** 2
+        y2norm2 = la.norm(y) ** 2
         rho = (1
                - 1 / np.sqrt(1
                              + (2 * mu
                                 + (mu**2)
-                                * np.linalg.norm(x) ** 2)
+                                * la.norm(x) ** 2)
                              * y2norm2)) / y2norm2
         U = T - rho * np.outer((T @ y), y.conj())
     else:
         if mu is None:
-            U = FRANSupd(x.T[0], U)
+            U = frans_upd(x.T[0], U)
         else:
-            U = FRANSupd(x.T[0], U, mu)
+            U = frans_upd(x.T[0], U, mu)
         for n in range(1, x.shape[1]):
-            U = FRANSupd(x.T[n], U, 1.0)
+            U = frans_upd(x.T[n], U, 1.0)
     return U
 
 
-def FDPMupd(x: np.ndarray,
-            U: np.ndarray,
-            mu: tp.Union[float, None] = None) -> np.ndarray:
+def fdpm_upd(x: np.ndarray,
+             U: np.ndarray,
+             mu: float = None) -> np.ndarray:
     """
     Fast Data Projection Method.
 
@@ -625,7 +633,7 @@ def FDPMupd(x: np.ndarray,
         Observation vector.
     U : NumPy array
         Current subspace estimate.
-    mu : tp.Union[float, None], optional
+    mu : float, optional
         Forgetting factor. The default is None.
 
     Returns
@@ -637,29 +645,29 @@ def FDPMupd(x: np.ndarray,
     D = U.shape[1]
     if x.ndim == 1:
         if mu is None:
-            mu = np.linalg.norm(x) ** -2
+            mu = la.norm(x) ** -2
         y = U.conj().T @ x
         T = U + mu * np.outer(x, y.conj())
         if D == 1:
-            U = T / np.linalg.norm(T)
+            U = T / la.norm(T)
         else:
-            a = y - np.linalg.norm(y) * np.eye(D)[:, 0]
-            Z = T - 2 / (np.linalg.norm(a) ** 2) * np.outer(T @ a, a.conj())
-            U = Z @ np.diag(np.linalg.norm(Z, axis=0) ** -1)
+            a = y - la.norm(y) * np.eye(D)[:, 0]
+            Z = T - 2 / (la.norm(a) ** 2) * np.outer(T @ a, a.conj())
+            U = Z @ np.diag(la.norm(Z, axis=0) ** -1)
     else:
         N = x.shape[1]
         if mu is None:
-            U = FRANSupd(x.T[0], U)
+            U = fdpm_upd(x.T[0], U)
         else:
-            U = FRANSupd(x.T[0], U, mu)
+            U = fdpm_upd(x.T[0], U, mu)
         for n in range(1, N):
-            U = FDPMupd(x.T[n], U, 1.0)
+            U = fdpm_upd(x.T[n], U, 1.0)
     return U
 
 
-def FSDPMupd(x: np.ndarray,
-             U: np.ndarray,
-             ff: float = 0.97) -> np.ndarray:
+def fsdpm_upd(x: np.ndarray,
+              U: np.ndarray,
+              ff: float = 0.97) -> np.ndarray:
     """
     Fast and stable DPM update.
 
@@ -681,19 +689,12 @@ def FSDPMupd(x: np.ndarray,
     if x.ndim == 1:
         y = U.conj().T @ x
         z = U @ y
-        y_norm = np.linalg.norm(y)
+        y_norm = la.norm(y)
         w = z / y_norm + ff * x * y_norm
-        q = w / np.linalg.norm(w) - z / y_norm
+        q = w / la.norm(w) - z / y_norm
         U += np.outer(q, y.conj()) / y_norm
     else:
-        U = FSDPMupd(x.T[0], U)
+        U = fsdpm_upd(x.T[0], U)
         for n in range(1, x.shape[1]):
-            U = FSDPMupd(x.T[n], U, 1.0)
-        # Y = U.conj().T @ x
-        # Z = U @ Y
-        # Y_col_norm = np.linalg.norm(Y, axis=0)
-        # W = Z @ np.diag(1 / Y_col_norm) + ff * x @ np.diag(Y_col_norm)
-        # W_col_norm = np.linalg.norm(W, axis=0)
-        # Q = W @ np.diag(1 / W_col_norm) - Z @ np.diag(1 / Y_col_norm)
-        # U += Q @ (Y @ np.diag(1 / Y_col_norm)).conj().T
+            U = fsdpm_upd(x.T[n], U, 1.0)
     return U
