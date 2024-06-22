@@ -390,7 +390,7 @@ def sps(X: np.ndarray, L: int = 2) -> np.ndarray:
         Spatially smoothed input matrix.
 
     """
-    M = X.shape[0]
+    M = len(X)
     if L >= M:
         raise SystemExit("No. of subarrays cannot equal no. of elements")
     J = [selM(M, M - L + 1, m) for m in range(L)]
@@ -456,7 +456,7 @@ def MuDe(X: np.ndarray, D: int, L: int = 2) -> np.ndarray:
         Processed matrix.
 
     """
-    M = X.shape[0]
+    M = len(X)
     if L >= M:
         raise SystemExit("No. of subarrays cannot equal no. of elements")
     W = lra(X, D)
@@ -487,7 +487,7 @@ def tri(A: np.ndarray) -> np.ndarray:
 
 def cov_upd(covariance: np.ndarray,
             x: np.ndarray,
-            forget: float = 0.8) -> np.ndarray:
+            forget: float = 0.8) -> tp.Tuple[np.ndarray]:
     """
     Covariance matrix update
 
@@ -548,8 +548,8 @@ def inv_spec_upd(inv_spectrum: np.ndarray,
         Updated inverse spectrum.
 
     """
-    L = g.shape[0]
-    K = inv_spectrum.shape[0]
+    L = len(g)
+    K = len(inv_spectrum)
     if F is None:
         F = ula(L, np.linspace(-np.pi / 2, np.pi / 2, K))
     phi = phi / (K * (1 - forget))
@@ -564,7 +564,7 @@ def recapon_upd(inv_covariance: np.ndarray,
                 F: np.ndarray = None) -> tp.Tuple[np.ndarray,
                                                   np.ndarray]:
     if F is None:
-        L = x.shape[0]
+        L = len(x)
         K = 181
         F = ula(L, np.linspace(-np.pi / 2, np.pi / 2, 181))
     else:
@@ -595,7 +595,7 @@ def beamformer(X: np.ndarray,
         Beamformer pseudo-spectrum.
 
     """
-    M = X.shape[0]
+    M = len(X)
     if A is None:
         A = ula(M, np.linspace(-np.pi / 2, np.pi / 2, 181))
     if isinstance(A, list):
@@ -654,6 +654,27 @@ def capon(X: np.ndarray,
         Rxx = X @ np.conjugate(X.T) / N
         invRxx = la.inv(Rxx)
     return -20 * np.log10(beamformer(invRxx, A)).real
+
+
+def mvdr(mu: np.ndarray, invRxx: np.ndarray) -> np.ndarray:
+    """
+    Minimum variance distortionless response filter
+
+    Parameters
+    ----------
+    mu : NumPy array
+        Spatial frequency(ies).
+    invRxx : NumPy array
+        Inverse covariance matrix.
+
+    Returns
+    -------
+    NumPy array
+        Filter.
+
+    """
+    M = len(invRxx)
+    return invRxx @ una(M, mu) / M
 
 
 def linear_pred(X: np.ndarray,
@@ -789,7 +810,7 @@ def music_roots(C: np.ndarray) -> np.ndarray:
     NumPy array
         MUSIC roots (all 2*(M-1) roots).
     """
-    M: int = C.shape[0]
+    M: int = len(C)
     coefficients: tp.List[np.complex128] = [sum(np.diagonal(C, offset))
                                             for offset in range(1-M, M)]
     return np.roots(coefficients).conj()
@@ -991,7 +1012,7 @@ def ula(M: int,
     A : NumPy array
         Array steering matrix.
     """
-    if isinstance(D, int):
+    if isinstance(D, int) and D != 0:
         az = (np.random.rand(D) - 0.5) * np.pi
     else:
         az = D
@@ -1089,7 +1110,10 @@ def mdl(X: np.ndarray,
 
     """
     M, N = X.shape
-    Rxx = X @ np.conj(X.T) / N
+    if M == N:
+        Rxx = X
+    else:
+        Rxx = X @ np.conj(X.T) / N
 
     eigenvalues = la.eigvals(Rxx).real
     if eigenvalues.sum() < 0:
@@ -1168,8 +1192,8 @@ def aic(X: np.ndarray,
 
 
 def eft(X: np.ndarray,
-        tol: float = 1e-2,
-        q: tp.Union[float, None] = None) -> int:
+        tol: float = 1e2,
+        q: tp.Union[float, None] = None) -> tp.Tuple[int, np.ndarray]:
     """
     Exponential Fitting Test.
 
@@ -1194,20 +1218,18 @@ def eft(X: np.ndarray,
 
     """
     M, N = X.shape
-    R = np.cov(X)
+    if M == N:
+        Rxx = X
+    else:
+        Rxx = X @ np.conj(X.T) / N
 
-    evs = la.eigvals(R)
+    evs = la.eigvals(Rxx).real
     if q is None:
-        q = np.exp(
-            np.sqrt(
-                30 / (M**2 + 2)
-                - np.sqrt(
-                    900 / ((M**2 + 2) ** 2) - 720 * M / (N * (M**4 + M**2 - 2))
-                )
-            )
-        )
-    eft = evs[-1] * (q ** np.arange(M - 1, -1, -1))
+        q = np.exp(np.sqrt(30 / (M**2 + 2)
+                           - np.sqrt(900 / ((M ** 2 + 2) ** 2)
+                                     - 720 * M / (N * (M ** 4 + M ** 2 - 2)))))
+    cost = evs[-1] * (q ** np.arange(M - 1, -1, -1))
     d = 0
-    while abs(evs[d] - eft[d]) > tol:
+    while abs(evs[d] - cost[d]) < tol:
         d += 1
-    return d
+    return d, cost
