@@ -811,7 +811,7 @@ def music_roots(C: np.ndarray) -> np.ndarray:
         MUSIC roots (all 2*(M-1) roots).
     """
     M: int = len(C)
-    coefficients: tp.List[np.complex128] = [sum(np.diagonal(C, offset))
+    coefficients: tp.List[np.complex128] = [np.trace(C, offset)
                                             for offset in range(1-M, M)]
     return np.roots(coefficients).conj()
 

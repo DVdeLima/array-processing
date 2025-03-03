@@ -13,6 +13,7 @@ Includes:
         Orthogonal PAST (opast_upd)
         Fast Constrained PAST (fcpast_upd)
         Generalized YAST (gyast_upd)
+        Affine Projection Subspace Tracking (apst_upd)
     2. Power iteration-based
         Fast Approximate Power Iteration (fapi_upd)
     3. Raileigh quotient-based
@@ -30,8 +31,9 @@ import typing as tp
 
 # %% Auxiliary functions
 
-def stripe(M: int, N: int, normalize: bool = True) -> np.ndarray:
-    if M == N:
+def stripe(M: int, N: tp.Optional[int] = None,
+           normalize: tp.Optional[bool] = True) -> np.ndarray:
+    if N is None or M == N:
         return np.eye(M)
     if M > N:
         res = np.vstack((np.tile(np.eye(N, dtype=complex), (M//N, 1)),
@@ -98,6 +100,26 @@ def svd_upd(X: np.ndarray,
     return (U[:, :R], evs[:R])
 
 
+def diagprod(A: np.array, B: np.array) -> np.array:
+    '''
+    Diagonal product
+
+    Parameters
+    ----------
+    A : NumPy array
+        First input matrix.
+    B : NumPy array
+        Second input matrix.
+
+    Returns
+    -------
+    NumPy array
+        Diagonal product vector.
+
+    '''
+    return np.einsum('ij, ij->j', A, B)
+
+
 # %% PAST-based
 
 def past_upd(X: np.ndarray,
@@ -140,8 +162,9 @@ def past_upd(X: np.ndarray,
     else:
         Y = U.conj().T @ X
         E = X - U @ Y
-        C = ff * C + Y @ Y.conj().T
-        G = la.inv(C) @ Y
+        H = C @ Y
+        G = H @ np.diag(1 / (ff + diagprod(Y.conj(), H)))
+        C = tri(C - G @ H.T.conj())
         U = U + E @ G.conj().T
     return (U, C)
 
@@ -500,6 +523,48 @@ def bgyast_upd(x: np.ndarray,
     return U, P, sigma_n
 
 
+def apst_upd(X: np.ndarray,
+             U: np.ndarray,
+             ss: float = 1e-3,
+             rf: float = 1e-13) -> np.ndarray:
+    '''
+    Affine Projection Subspace Tracking update
+
+    Parameters
+    ----------
+    X : NumPy array
+        Input vector/matrx.
+    U : NumPy array
+        Estimated subpace.
+    ss : float, optional
+        Step size. The default is 1e-3.
+    rf : float, optional
+        Tikhonov regularization factor. The default is 1e-13.
+
+    Returns
+    -------
+    U : NumPy array
+        Updated subspace estimate.
+
+    '''
+    D = U.shape[1]
+    if X.ndim == 1:
+        y = U.T.conj() @ X
+        e = X - U @ y
+        dU = np.outer(e, y.conj()) @ la.inv(np.outer(y, y.conj())
+                                            + rf * np.eye(D))
+    else:
+        N = X.shape[1]
+        Y = U.T.conj() @ X
+        E = X - U @ Y
+        if D > N:
+            dU = E @ Y.T.conj() @ la.inv(Y.T.conj() @ Y + rf * np.eye(D))
+        else:
+            dU = E @ la.inv(Y.T.conj() @ Y + rf * np.eye(N)) @ Y.T.conj()
+    U = U + ss * dU
+    return U
+
+
 # %% Power Iteration-based
 
 def fapi_upd(x: np.ndarray,
@@ -575,7 +640,7 @@ def bfapi_upd(x: np.ndarray,
     return (U, C)
 
 
-# %% Rayleigh quotient-based
+# %% Rayleigh Quotient-based
 
 def frans_upd(x: np.ndarray,
               U: np.ndarray,

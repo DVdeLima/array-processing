@@ -10,9 +10,11 @@ Includes:
         Column normalization (colnorm)
         Kronecker product (kron)
         Khatri-Rao product (kr)
+        Kronecker to KR prod. sel. matrix (kron2kr)
         Unfold tensor (unfold)
         Fold tensor (fold)
         Tensor-matrix product (tmprod)
+        Tensor inner product (tip)
         Generate identity tensor (eyeNR)
         Generate tensor from CPD (cpdgen)
         Generate L-rank identity tensor (eyeNL)
@@ -28,7 +30,8 @@ Includes:
         Spatial smoothing (sps)
     3. R-D array processing
         Generate R-dim. steering matrices (una)
-        Generate lin/rect/par steering matrices (uxa)
+        Generate lin./rect./par. steering matrices (uxa)
+        Maximum overlap selection matrices (mosm)
         Standard Tensor ESPRIT (ste)
         GEVD-based spatial freq. pairing (gevdpair)
         Unitary Tensor ESPRIT (ute)
@@ -55,6 +58,7 @@ __all__ = [
     "unfold",
     "fold",
     "tmprod",
+    "tip",
     "eyeNR",
     "cpdgen",
     "eyeNL",
@@ -69,8 +73,9 @@ __all__ = [
     "sps",
     "una",
     "uxa",
+    "mosm",
     "ste",
-    "gevdpair",
+    "gevd_pair",
     "ute",
     "ute_pair",
     "sf_check",
@@ -86,12 +91,11 @@ __all__ = [
 # %% Load dependencies
 
 import numpy as np
-import numpy.linalg as la
+import scipy.linalg as la
 import typing as tp
 
 # %% Load individual functions
 
-from scipy.linalg import eig
 from itertools import permutations
 
 # %% Debug modules
@@ -378,6 +382,41 @@ def tmprod(T: np.ndarray,
     return np.einsum(T, range(N), *operands, output)
 
 
+def tip(tensors: tp.List[np.ndarray],
+        modes: tp.List[int] = None) -> np.ndarray:
+    """
+    Tensor inner product.
+
+    Parameters
+    ----------
+    tensors : List of NumPy arrays
+        Input tensors.
+    modes : List of ints, optional
+        List of inner product modes. The default is None.
+        If not set defaults to the last mode for all tensors.
+
+    Returns
+    -------
+    NumPy array
+        Inner product tensor.
+
+    """
+    ndims = [tensor.ndim for tensor in tensors]
+    mode_op_indices = [[sum(ndims[:end]), sum(ndims[:end+1])]
+                       for end in range(len(ndims))]
+    mode_ops = [list(range(*indices)) for indices in mode_op_indices]
+    if modes is None:
+        modes = [n - 1 for n in ndims]
+    input_ops_list = [[tensor, mode_op]
+                      for tensor, mode_op in zip(tensors, mode_ops)]
+    input_ops = [x for op in input_ops_list for x in op]
+    del input_ops_list
+    output_ops_list = [mode_op[:mode] + mode_op[mode+1:]
+                       for mode_op, mode in zip(mode_ops, modes)]
+    output_ops = [x for op in output_ops_list for x in op]
+    return np.einsum(*(input_ops + [output_ops]))
+
+
 def eyeNR(N: int, R: int) -> np.ndarray:
     """
     Generate N-th order, rank R identity tensor.
@@ -401,6 +440,28 @@ def eyeNR(N: int, R: int) -> np.ndarray:
     eye = np.zeros([R] * N, int)
     eye[tuple(np.arange(R) for _ in range(N))] = 1
     return eye
+
+
+def hyperdiag(vec: np.array, N: int = 3) -> np.array:
+    """
+    Hyperdiagonal
+
+    Parameters
+    ----------
+    vec : NumPy array (vector)
+        Input vector.
+    N : int, optional
+        Number of dimensions. The default is 3.
+
+    Returns
+    -------
+    NumPy array
+        Hyperdiagonal tensor.
+    """
+    R = len(vec)
+    H = np.zeros([vec.shape[0]] * N, dtype=complex)
+    H[tuple(np.arange(R) for _ in range(N))] = vec
+    return H
 
 
 def cpdgen(F: list, opt: bool = False) -> np.ndarray:
@@ -516,7 +577,7 @@ def noisy(T: np.ndarray,
     tensor_shape = T.shape
     if np.iscomplex(T).any():
         N = np.random.randn(*tensor_shape) + \
-            1j * np.random.randn(*tensor_shape)
+            1j * np.random.randn(*tensor_shape) / np.sqrt(2)
     else:
         N = np.random.randn(*tensor_shape)
     scale = la.norm(T) * (10 ** (-SNR / 20)) / la.norm(N)
@@ -604,30 +665,38 @@ def lra(X: np.ndarray,
         return tmprod(S, U)
 
 
-def fba(X: np.ndarray, exp: bool = False) -> np.ndarray:
+def fba(T: np.ndarray,
+        mode: int = None) -> np.ndarray:
     """
-    Forward-backward averaging.
-
-    The last mode is assumed to be the temporal mode.
+    Foward-backward averaging
 
     Parameters
     ----------
-    X : NumPy array
+    T : NumPy array
         Input tensor.
-    exp : bool, optional, defaults to False
-        Use expanded FBA.
+    mode : int, optional
+        Expansion mode. The default is None.
 
     Returns
     -------
     NumPy array
-        Forward-backward averaged tensor.
+        FB-aliased tensor.
+
     """
-    N = X.ndim
-    if N == 2:
-        return np.hstack((X, np.fliplr(np.flipud(X.conj()))))
+    N = T.ndim
+    modes = list(range(N))
+    sizes = T.shape
+    if mode is None:
+        mode = N
+    if mode == N:
+        EM = [np.fliplr(np.eye(sizes[mode]))
+              for mode in modes]
+        return np.stack((T, tmprod(T, EM, modes)), axis=mode)
     else:
-        PI = [np.fliplr(np.eye(s)) for s in X.shape]
-        return np.concatenate((X, tmprod(X.conj(), PI)), N - 1)
+        modes.pop(mode)
+    EM = [np.fliplr(np.eye(sizes[mode]))
+          for mode in modes]
+    return np.concatenate((T, tmprod(T, EM, modes)), axis=mode)
 
 
 def qunit(M: int) -> np.ndarray:
@@ -661,8 +730,8 @@ def qunit(M: int) -> np.ndarray:
     return Q
 
 
-def unitransf(X: np.ndarray) -> tp.Tuple[np.ndarray,
-                                         np.ndarray]:
+def unitransf(X: np.ndarray, exp: bool = False) -> tp.Tuple[np.ndarray,
+                                                            np.ndarray]:
     """
     Unitary transformation.
 
@@ -678,7 +747,7 @@ def unitransf(X: np.ndarray) -> tp.Tuple[np.ndarray,
         Forward-backward averaged matrix.
         Unitary transform residual matrix.
     """
-    Y = fba(X)
+    Y = fba(X, exp)
     QH = [qunit(m).conj().T for m in Y.shape]
     Z = tmprod(Y, QH)
 
@@ -708,49 +777,54 @@ def cheapUT(X: np.ndarray) -> np.ndarray:
     return np.concatenate((Y.real, Y.imag), R)
 
 
-def sps(X: np.ndarray, L: int = 2, expanded: bool = False) -> np.ndarray:
+def sps(T: np.ndarray,
+        mode: int = None,
+        L: int = 2) -> np.ndarray:
     """
-    Spatial smoothing.
-
-    Increases no. of samples using subarrays of the original data.
+    Spatial Smoothing
 
     Parameters
     ----------
-    X : NumPy array
+    T : NumPy array
         Input tensor.
+    mode : int, optional
+        Expansion mode. The default is None.
     L : int, optional
         Number of subarrays. The default is 2.
-    expanded : bool, optional
-        Expanded spatial smoothing. The default is False.
 
     Raises
     ------
-    SystemExit
-        If number of subarrays is equal to the number of elements.
+    L < M +1
+        DESCRIPTION.
 
     Returns
     -------
     NumPy array
         Spatially smoothed tensor.
+
     """
-    R = X.ndim - 1
-    M = np.array(X.shape[:R])
-
-    if (L >= M).any():
-        raise SystemExit("No. of subarrays cannot equal no. of elements")
-
-    Msel = M - L + 1
-
-    J = [[np.hstack((np.zeros((m, n)),
-                     np.eye(m),
-                     np.zeros((m, L - (n + 1)))))
-          for m in Msel] for n in range(L)]
-
-    if expanded:
-        Y = np.stack(([tmprod(X, j) for j in J]), R + 1)
+    N = T.ndim
+    modes = list(range(N))
+    sizes = T.shape
+    if mode is None:
+        mode = N
+    if mode == N:
+        if np.min(sizes) < L + 1:
+            raise ValueError('No. of subarrays too large')
+        J = [[np.hstack((np.zeros((sizes[m] - L + 1, ell)),
+                         np.eye(sizes[m] - L + 1),
+                         np.zeros((sizes[m] - L + 1, L - (ell + 1)))))
+              for m in modes] for ell in range(L)]
+        return np.stack([tmprod(T, j, modes) for j in J], axis=mode)
     else:
-        Y = np.concatenate(([tmprod(X, j) for j in J]), R)
-    return Y
+        modes.pop(mode)
+        if np.any([sizes[m] < L + 1 for m in modes]):
+            raise ValueError('No. of subarrays too large')
+    J = [[np.hstack((np.zeros((sizes[m] - L + 1, ell)),
+                     np.eye(sizes[m] - L + 1),
+                     np.zeros((sizes[m] - L + 1, L - (ell + 1)))))
+          for m in modes] for ell in range(L)]
+    return np.concatenate([tmprod(T, j, modes) for j in J], axis=mode)
 
 
 # %% R-D array processing
@@ -832,109 +906,110 @@ def uxa(M: tp.Union[int, list],
     return una(M, mu), mu
 
 
-def ste(X: np.ndarray,
-        D: int,
-        matrix_sse: bool = False,
-        kron_sse: bool = False) -> list:
+def mosm(M: int | list) -> np.ndarray | list:
+    """
+    Maximum overlap selection matrix
+
+    Parameters
+    ----------
+    M : int or list
+        No. of array elements.
+
+    Returns
+    -------
+    NumPy array or list of NumPy array
+        Max. overlap selection matrices.
+
+    """
+    if isinstance(M, int):
+        return [np.vstack((np.eye(M - 1), np.zeros(M - 1))).T,
+                np.vstack((np.zeros(M - 1), (np.eye(M - 1)))).T]
+    J = [mosm(m) for m in M]
+    eyes = [np.eye(m) for m in M]
+    return [[kron(eyes[:n] + [jay] + eyes[n+1:])
+             for jay in j]
+            for n, j in enumerate(J)]
+
+
+def ste(X: np.ndarray, D: int,
+        matrix_sse: bool = True,
+        kron_sse: bool = False,
+        J: list = None) -> list:
     """
     Standard Tensor ESPRIT
 
     Parameters
     ----------
     X : NumPy array
-        Input tensor.
+        Data tensor.
     D : int
         Model order.
     matrix_sse : bool, optional
-        Use matrix-based signal subspace est.
-        The default is False.
+        Matrix-based subspace estimate. The default is True.
     kron_sse : bool, optional
-        Use Kronecker structured projections to
-        estimate subspace. The default is False.
+        Kronecker projection-based subspace estimate. The default is False.
+    J : list
+        Selection matrix list. The default is None.
 
     Returns
     -------
     list
-        Shift invariance eigenstructures (unpaired).
+        Shift-invariant eigenstructures (Psi, unpaired).
+
     """
     R = X.ndim - 1
-    M = np.asarray(X.shape[:R])
+    M = X.shape[:R]
     P = [*np.minimum(M, D), D]
 
-    # selection matrices
-    Msel = M - 1
+    if J is None:
+        J = mosm(M)
 
-    J_0 = [np.hstack((np.eye(m),
-                      np.zeros((m, 1))))
-           for m in Msel]
-    J_1 = [np.hstack((np.zeros((m, 1)),
-                      np.eye(m)))
-           for m in Msel]
-
-    I_left = [np.eye(np.prod(M[:r]))
-              for r in range(R)]
-    I_right = [np.eye(np.prod(M[r + 1: R]))
-               for r in range(R)]
-
-    J_0 = [kron([i_left, j_0, i_right])
-           for i_left, j_0, i_right
-           in zip(I_left, J_0, I_right)]
-    J_1 = [kron([i_left, j_1, i_right])
-           for i_left, j_1, i_right
-           in zip(I_left, J_1, I_right)]
-    # subpace estimation
-    if (kron_sse ^ matrix_sse):
-        Us, sigmas = [truncate(m, D)
-                      for m in la.svd(unfold(X, R).T,
-                                      full_matrices=False)[:2]]
+    # subspace estimation
+    if matrix_sse:
+        Us, sigmas = [m.T[:D].T for m
+                      in la.svd(unfold(X, R).T, full_matrices=False)[:2]]
         Sigmas = np.diag(sigmas)
-        if matrix_sse:
-            ISSE = Us @ Sigmas
-        else:
-            U = [truncate(m, D)
-                 for m in [la.svd(unfold(X, r))[0]
-                           for r in range(R)]]
+        ISSE = Us @ Sigmas
+        if kron_sse:
+            U = [la.svd(unfold(X, r), full_matrices=False)[0][:, :p]
+                 for r, p in zip(range(R), P[:R])]
             U_Kron = kron(U)
-            ISSE = U_Kron @ U_Kron.T.conj() @ (Us @ Sigmas)
+            ISSE = U_Kron @ U_Kron.T.conj() @ ISSE
     else:
-        perm = np.flip(np.argsort(X.shape))
-        U, S = stmlsvd(X, P, perm)[:2]
-        ISSE = unfold(tmprod(S, U[:R]), R).T
+        if kron_sse:
+            U = [la.svd(unfold(X, r), full_matrices=False)[0][:, :p]
+                 for r, p in zip(range(R), P[:R])]
+            U_Kron = kron(U)
+            U_KR = kr(U)
+            ISSE = (U_Kron @ U_Kron.T.conj()) @ U_KR
+        else:
+            U, S = stmlsvd(X, P)[:2]
+            ISSE = unfold(tmprod(S, U[:R]), R).T
+    return [la.pinv(j[0] @ ISSE) @ (j[1] @ ISSE) for j in J]
 
-    # shift invariance equations
-    Psi = [la.pinv(j_0 @ ISSE) @ (j_1 @ ISSE)
-           for j_0, j_1 in zip(J_0, J_1)]
-    return Psi
 
-
-def gevdpair(Psi: list) -> list:
+def gevd_pair(Psi: tp.List[np.ndarray]) -> tp.List[np.ndarray]:
     """
-    GEVD-based shift-invariant eigenstructure pairing.
+    GEVD-based pairing.
 
     Parameters
     ----------
-    Psi : list
-        Shift invariance eigenstructures.
+    Psi : list of NumPy arrays
+        List of shift-invariant eigenstructures.
 
     Returns
     -------
-    list
-        Shift-invariant matrices.
+    list of NumPy arrays (vectors)
+        Paired spatial frequencies.
+
     """
-    R = len(Psi)
-    Rev = eig(*Psi[:2])[1]
-    Phi = [Rev.T.conj() @ psi @ Rev for psi in Psi[:2]]
-    if R > 2:
-        idx = np.angle(Phi[0].diagonal()).argsort()
-        Phi = [phi[idx] for phi in Phi]
-        for r in range(2, R):
-            pair = [Psi[0], Psi[r]]
-            Rev = eig(*pair)[1]
-            newPhi = [Rev.T.conj() @ psi @ Rev
-                      for psi in pair]
-            idx = np.angle(newPhi[0].diagonal()).argsort()
-            Phi.append(newPhi[1][idx])
-    return Phi
+    R = la.eig(*Psi[::-1])[1]
+    return [np.angle(np.diag(la.inv(R) @ psi @ R)) for psi in Psi]
+
+
+def qzpair(Psi: list) -> list:
+    Phi = la.qz(*Psi)[0]
+    return np.angle(Phi[1] / Phi[0])
 
 
 def sfPhi(Phi: list) -> tp.List[np.ndarray]:
@@ -1064,7 +1139,7 @@ def ute_pair(Psi: list) -> tp.List[np.ndarray]:
 
     Psi_complex = Psi[0] + 1j * Psi[1]
 
-    Phi_complex = eig(Psi_complex)[0]
+    Phi_complex = la.eig(Psi_complex)[0]
     Phi = [Phi_complex.real, Phi_complex.imag]
     if R > 2:
         idx = Phi[0].argsort()
@@ -1072,7 +1147,7 @@ def ute_pair(Psi: list) -> tp.List[np.ndarray]:
         for r in range(2, R):
             Psi_complex = Psi[0] + 1j * Psi[r]
 
-            Phi_complex = eig(Psi_complex)[0]
+            Phi_complex = la.eig(Psi_complex)[0]
             idx = Phi_complex.real.argsort()
             Phi.append(Phi_complex.imag[idx])
 
@@ -1170,7 +1245,7 @@ def stmlsvd(T: np.ndarray,
             Sp = unfold(S, p)
             SHS = Sp @ Sp.conj().T
             if usefull:
-                ev, U[p] = eig(SHS)
+                ev, U[p] = la.eig(SHS)
                 U[p] = U[p][:, : size_core[p]]
                 sv[p] = np.sqrt(abs(ev[: size_core[p]]))
             else:
@@ -1224,7 +1299,7 @@ def tmlsvd(T: np.ndarray,
         Sp = [unfold(T, n) for n in range(N)]
         SHS = [s @ s.T.conj() for s in Sp]
         if usefull:
-            ev, U = zip(*[eig(s) for s in SHS])
+            ev, U = zip(*[la.eig(s) for s in SHS])
             sv = [np.sqrt(abs(e[:size])) for e, size in zip(ev, size_core)]
             U = [u[:, :size] for u, size in zip(U, size_core)]
         else:
@@ -1332,7 +1407,7 @@ def cpdgevd(T: np.ndarray, R: int,
 
     """
     U, S = stmlsvd(T, (R, R, np.max((R, 2))))[:2]
-    R = eig(S[:, :, 0].T, S[:, :, 1].T)[1]
+    R = la.eig(S[:, :, 0].T, S[:, :, 1].T)[1]
 
     F23 = unfold(T, 0).T @ U[0].conj() @ R
     F = [U[0] @ la.inv(R.T)] + lskrf(F23, T.shape[1])
@@ -1342,7 +1417,7 @@ def cpdgevd(T: np.ndarray, R: int,
     return F
 
 
-def cpdgevd2(T: np.ndarray, R: int,
+def cpdgevd2(T: np.ndarray, D: int,
              normcols: bool = False,
              thirdonly: bool = False) -> tp.List[np.array]:
     """
@@ -1356,8 +1431,6 @@ def cpdgevd2(T: np.ndarray, R: int,
         Rank.
     normcols : bool, optional
         Normalize columns. The default is False.
-    fast : bool, optional
-        Something fast, I think.
     thirdonly : bool, optional
         Return only third factor matrix. The default is False.
 
@@ -1367,19 +1440,14 @@ def cpdgevd2(T: np.ndarray, R: int,
         Estimated factor matrices.
 
     """
-    U, S = stmlsvd(T, (R, R, np.max((R, 2))))[:2]
-    # C = R
-    L, R = eig(S[:, :, 0], S[:, :, 1], left=True)[1:]
+    U, S = stmlsvd(T, (D, D, np.max((D, 2))))[:2]
+    L, R = la.eig(S[:, :, 0], S[:, :, 1], left=True)[1:]
 
-    T = [None] * 3
-    T[2] = tmprod(S, [L.T.conj(), R.T]).diagonal()
-    # T[2] = np.stack([np.diagonal(L.T.conj() @ S[:, :, r] @ R)
-    #                  for r in range(C)])
-    # T[2] = unfold(S, 2) @ kron([L.conj(), R])[:, ::C+1]
-    # T[2] = unfold(S, 2) @ la.pinv(kr([la.inv(L.T.conj()), la.inv(R.T)])).T
     if thirdonly:
-        return U[2] @ T[2]
+        return U[2] @ tmprod(S, [L.T.conj(), R.T]).diagonal()
+    T = [None] * 3
     T[:2] = [la.inv(lr) for lr in (L.T.conj(), R.T)]
+    T[2] = tmprod(S, [L.T.conj(), R.T]).diagonal()
     F = [u @ t for u, t in zip(U, T)]
     if normcols:  # normalize columns
         F = [colnorm(f) for f in F]
@@ -1439,7 +1507,7 @@ def htkrf(K: np.ndarray,
     for n in range(N - 1):
         T = fold(K, [[0, 1], 2], [M[n], np.prod(M[(n+1):]), C])
         U, S = stmlsvd(T, C, np.argsort(T.shape)[::-1])[:2]
-        R, L = eig(S[:, :, 0], S[:, :, 1], left=True)[1:]
+        R, L = la.eig(S[:, :, 0], S[:, :, 1], left=True)[1:]
         F.append(np.einsum(tmprod(T, R @ U[1].T.conj(), 1), [0, 1, 2], [0, 2]))
         K = np.einsum(tmprod(T, L @ U[0].T.conj(), 0), [0, 1, 2], [1, 2])
     F.append(K)
