@@ -857,8 +857,8 @@ def una(M: tp.Union[int, list, np.ndarray],
     return [np.exp(1j * np.outer(d, m)) for d, m in zip(deltaM, mu)]
 
 
-def uxa(M: tp.Union[int, list],
-        D: tp.Union[int, list] = 1) -> tp.Tuple[list, list]:
+def uxa(M: int | list,
+        D: int | list = 1) -> tp.Tuple[list, list]:
     """
     Uniform Linear/Rectangular/Cubic Array.
 
@@ -879,30 +879,45 @@ def uxa(M: tp.Union[int, list],
         List of steering matrices and list of spatial frequencies.
     """
     if isinstance(M, int):
-        R = 1
+        R = 1  # ULA
     else:
-        R = len(M)
+        R = len(M)  # URA/UCA
 
-    if isinstance(D, int):
+    if isinstance(D, int):  # D is model order
         if R == 1:
-            az = np.pi * (np.random.rand(D) - 0.5)
+            azimuth = np.pi * (np.random.rand(D) - 0.5)
         else:
-            az = 2 * np.pi * (np.random.rand(D) - 0.5)
-            el = np.pi * (np.random.rand(D) - 0.5)
-    else:
+            azimuth = 2 * np.pi * (np.random.rand(D) - 0.5)
+            elevation = np.pi * np.random.rand(D)
+    else:  # D is list, not model order
         if R == 1:
-            az = D
+            azimuth = D
         else:
-            az = D[0]
-            el = D[1]
+            if len(D) > 1:
+                azimuth, elevation = zip(*[[d[0], d[1]] for d in D])
+                D = len(D)
+            else:
+                azimuth = D[0]
+                elevation = D[1]
+                D = 1
 
     if R == 1:
-        mu = np.pi * np.sin(az)
+        mu = np.pi * np.sin(azimuth)
         return una(M, mu), mu
-    mu = [np.pi * np.cos(az) * np.sin(el)]
-    mu.append(np.pi * np.sin(az) * np.sin(el))
+    # mu = list(np.pi * np.array([np.cos(azimuth),
+    #                             np.sin(azimuth)]) * np.sin(elevation))
+    if D > 1:
+        mu = [np.pi * np.array([np.cos(az), np.sin(az)]) * np.sin(el)
+              for az, el in zip(azimuth, elevation)]
+    else:
+        mu = [np.pi * np.cos(azimuth) * np.sin(elevation),
+              np.pi * np.sin(azimuth) * np.sin(elevation)]
+    # mu = [np.pi * np.cos(az) * np.sin(el), np.pi * np.sin(az) * np.sin(el)]
     if R == 3:
-        mu.append(np.pi * np.cos(el))
+        if D > 1:
+            [m.append(np.pi * np.cos(el)) for m, el in zip(mu, elevation)]
+        else:
+            mu.append(np.pi * np.cos(elevation))
     return una(M, mu), mu
 
 
