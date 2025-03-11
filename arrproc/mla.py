@@ -30,6 +30,7 @@ Includes:
         Spatial smoothing (sps)
     3. R-D array processing
         Generate R-dim. steering matrices (una)
+        Spatial frequency calculator (sf_calc)
         Generate lin./rect./par. steering matrices (uxa)
         Maximum overlap selection matrices (mosm)
         Standard Tensor ESPRIT (ste)
@@ -72,6 +73,7 @@ __all__ = [
     "cheapUT",
     "sps",
     "una",
+    "sf_calc",
     "uxa",
     "mosm",
     "ste",
@@ -830,8 +832,8 @@ def sps(T: np.ndarray,
 # %% R-D array processing
 
 
-def una(M: tp.Union[int, list, np.ndarray],
-        mu: np.ndarray) -> np.ndarray:
+def una(M: int | list | np.ndarray,
+        mu: float | list | np.ndarray) -> np.ndarray | list:
     """
     Uniform N-dimensional Array.
 
@@ -842,7 +844,7 @@ def una(M: tp.Union[int, list, np.ndarray],
     ----------
     M : int, list, or NumPy array
         No. of array elements in each dimension.
-    mu : NumPy array (vector)
+    mu : float, list, or NumPy array
         Spatial frequencies. Also defines model order.
 
     Returns
@@ -851,73 +853,108 @@ def una(M: tp.Union[int, list, np.ndarray],
         List of steering matrices (NumPy array).
     """
     if isinstance(M, int):
-        deltaM = np.array([n/2 for n in range(1 - M, M, 2)])
+        deltaM = np.array([m/2 for m in range(1 - M, M, 2)])
         return np.exp(1j * np.outer(deltaM, mu))
-    deltaM = [np.array([n/2 for n in range(1 - m, m, 2)]) for m in M]
-    return [np.exp(1j * np.outer(d, m)) for d, m in zip(deltaM, mu)]
+    return [una(m, moo) for m, moo in zip(M, mu.T)]
 
 
-def uxa(M: int | list,
-        D: int | list = 1) -> tp.Tuple[list, list]:
+def sf_calc(R: int,
+            D: int | float | tuple | list | np.ndarray) -> float | np.ndarray:
     """
-    Uniform Linear/Rectangular/Cubic Array.
-
-    Generates left PI-real dimensionally separable array
-    steering matrices given no. of elements in each dimension,
-    and model order or azimuth (and elevation, if applicable).
+    Spatial Frequency calculator.
 
     Parameters
     ----------
-    M : int, list, NumPy array
-        No. of elements.
-    D : int, list, NumPy array, optional
-        Model order (int) or azimuth (and elevation).
+    R : int
+        Number of array dimensions.
+    D : int | float | tuple | list | NumPy array
+        Model order or DoA(s).
+
+    Raises
+    ------
+    TypeError
+        If R or D not of an accepted type.
+    NotImplementedError
+        If R > 3.
 
     Returns
     -------
-    List
-        List of steering matrices and list of spatial frequencies.
-    """
-    if isinstance(M, int):
-        R = 1  # ULA
-    else:
-        R = len(M)  # URA/UCA
+    TYPE
+        DESCRIPTION.
 
-    if isinstance(D, int):  # D is model order
-        if R == 1:
-            azimuth = np.pi * (np.random.rand(D) - 0.5)
-        else:
-            azimuth = 2 * np.pi * (np.random.rand(D) - 0.5)
-            elevation = np.pi * np.random.rand(D)
-    else:  # D is list, not model order
+    """
+    if R > 3:
+        raise NotImplementedError("No implementation for R > 3")
+    if isinstance(D, (tuple, list, np.ndarray)):
         if R == 1:
             azimuth = D
         else:
-            if len(D) > 1:
-                azimuth, elevation = zip(*[[d[0], d[1]] for d in D])
-                D = len(D)
+            if isinstance(D[0], float):
+                azimuth = D
+                elevation = np.pi / 2 * np.ones(len(D))
             else:
-                azimuth = D[0]
-                elevation = D[1]
-                D = 1
-
-    if R == 1:
-        mu = np.pi * np.sin(azimuth)
-        return una(M, mu), mu
-    # mu = list(np.pi * np.array([np.cos(azimuth),
-    #                             np.sin(azimuth)]) * np.sin(elevation))
-    if D > 1:
-        mu = [np.pi * np.array([np.cos(az), np.sin(az)]) * np.sin(el)
-              for az, el in zip(azimuth, elevation)]
-    else:
-        mu = [np.pi * np.cos(azimuth) * np.sin(elevation),
-              np.pi * np.sin(azimuth) * np.sin(elevation)]
-    # mu = [np.pi * np.cos(az) * np.sin(el), np.pi * np.sin(az) * np.sin(el)]
-    if R == 3:
-        if D > 1:
-            [m.append(np.pi * np.cos(el)) for m, el in zip(mu, elevation)]
+                azimuth, elevation = zip(*D)
+    elif isinstance(D, float):
+        if R == 1:
+            azimuth = D
         else:
-            mu.append(np.pi * np.cos(elevation))
+            azimuth = D
+            elevation = np.pi / 2
+    else:
+        raise TypeError("Invalid input type: model order/DoAs")
+    match R:
+        case 1:
+            mu = np.sin(azimuth)
+        case 2:
+            mu = np.einsum(np.array((np.cos(azimuth),
+                                     np.sin(azimuth))), [1, 0],
+                           np.sin(elevation), [0], [0, 1])
+        case 3:
+            mu = np.hstack((np.einsum(np.array((np.cos(azimuth),
+                                                np.sin(azimuth))), [1, 0],
+                                      np.sin(elevation), [0], [0, 1]),
+                            np.cos(elevation)[:, None]))
+        case _:
+            raise NotImplementedError("No implementation for R > 3")
+    return np.pi * mu
+
+
+def uxa(M: int | list,
+        D: int | float | list) -> (list, list):
+    """
+    Uniform Linear/Rectangular/Cuboid
+
+    Parameters
+    ----------
+    M : int | list
+        DESCRIPTION.
+    D : int | float | list
+        DESCRIPTION.
+
+    Raises
+    ------
+    TypeError
+        DESCRIPTION.
+    NotImplementedError
+        DESCRIPTION.
+
+    Returns
+    -------
+    (list, list)
+        DESCRIPTION.
+
+    """
+    R = len(M)
+    if isinstance(D, int):
+        if R == 1:
+            azimuth = np.pi * (np.random.rand(D) - 0.5)
+            mu = sf_calc(R, azimuth)
+        else:
+            azimuth = 2 * np.pi * (np.random.rand(D) - 0.5)
+            elevation = np.pi * np.random.rand(D)
+            mu = sf_calc(R, np.array([azimuth, elevation]).T)
+    else:
+        mu = sf_calc(R, D)
     return una(M, mu), mu
 
 
