@@ -255,7 +255,10 @@ def kron2kr(C: int) -> np.array:
         Kronecker to Khatri-Rao product selection matrix.
 
     """
-    return np.eye(C ** 2)[::C].T
+    K = np.zeros((C ** 2, C))
+    K[(range(0, C ** 2, C + 1), range(C))] = 1
+    return K
+    # return np.eye(C ** 2)[::(C + 1)].T
 
 
 def unfold(T: np.ndarray,
