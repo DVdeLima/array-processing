@@ -1406,6 +1406,49 @@ def estcore(T: np.ndarray,
     return S
 
 
+# %% Alternating Least Squares
+
+
+def als(T: np.ndarray, R: int,
+        maxit: int = 1000,
+        tol: float = 1e-3,
+        F: list = None) -> tp.Tuple[list, int, float]:
+    """
+    Alternating Least Squares PARAFAC decomposition
+
+    Parameters
+    ----------
+    T : NumPy array
+        Input tensor.
+    R : int
+        Rank.
+    maxit : int, optional
+        Maximum no. of iterations. The default is 1000.
+    tol : float, optional
+        Tolerance for relative reconst. error. The default is 1e-3.
+    F : list, optional
+        Factor matrix initialization overrides. The default is None.
+
+    Returns
+    -------
+    list of NumPy arrays
+        Estimated factor matrices.
+
+    """
+    rel_rec_error = 1.0
+    iteration = 0
+    no_dim = T.ndim
+    T_frob = frob(T)
+    if F is None:
+        F = [np.random.randn(m, R) for m in T.shape]
+    while (rel_rec_error > tol) and (iteration < maxit):
+        iteration += 1
+        for dim in range(no_dim):
+            F[dim] = unfold(T, dim) @ la.pinv(kr(F[:dim] + F[(dim + 1):])).T
+        rel_rec_error = frob(T - cpdgen(F)) / T_frob
+    return F, iteration, rel_rec_error
+
+
 # %% Canonical Polyadic Decomposition
 
 
