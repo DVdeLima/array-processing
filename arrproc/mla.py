@@ -71,7 +71,6 @@ __all__ = [
     "qunit",
     "unitransf",
     "cheapUT",
-    "sps",
     "una",
     "sf_calc",
     "uxa",
@@ -85,6 +84,8 @@ __all__ = [
     "stmlsvd",
     "tmlsvd",
     "estcore",
+    "als_upd",
+    "als",
     "cpdgevd",
     "cpdgevd2",
     "lskrf",
@@ -680,28 +681,23 @@ def fba(T: np.ndarray,
     T : NumPy array
         Input tensor.
     mode : int, optional
-        Expansion mode. The default is None.
+        FB-average "direction." The default is the last mode.
+        Will stack onto a new dimension if the specified mode
+        is equal to or greater than T.ndim
 
     Returns
     -------
     NumPy array
-        FB-aliased tensor.
+        FB-averaged tensor.
 
     """
     N = T.ndim
-    modes = list(range(N))
-    sizes = T.shape
+    EM = [np.fliplr(np.eye(m)) for m in T.shape]
     if mode is None:
-        mode = N
-    if mode == N:
-        EM = [np.fliplr(np.eye(sizes[mode]))
-              for mode in modes]
-        return np.stack((T, tmprod(T, EM, modes)), axis=mode)
-    else:
-        modes.pop(mode)
-    EM = [np.fliplr(np.eye(sizes[mode]))
-          for mode in modes]
-    return np.concatenate((T, tmprod(T, EM, modes)), axis=mode)
+        mode = N - 1
+    if mode >= N:
+        return np.einsum("i... -> ...i", np.stack((T, tmprod(T.conj(), EM))))
+    return np.concatenate((T, tmprod(T.conj(), EM)), axis=mode)
 
 
 def qunit(M: int) -> np.ndarray:
@@ -780,56 +776,6 @@ def cheapUT(X: np.ndarray) -> np.ndarray:
         QH = [qunit(m).conj().T for m in X.shape[:-1]]
         Y = tmprod(X, QH, modes=np.arange(R))
     return np.concatenate((Y.real, Y.imag), R)
-
-
-def sps(T: np.ndarray,
-        mode: int = None,
-        L: int = 2) -> np.ndarray:
-    """
-    Spatial Smoothing
-
-    Parameters
-    ----------
-    T : NumPy array
-        Input tensor.
-    mode : int, optional
-        Expansion mode. The default is None.
-    L : int, optional
-        Number of subarrays. The default is 2.
-
-    Raises
-    ------
-    L < M +1
-        DESCRIPTION.
-
-    Returns
-    -------
-    NumPy array
-        Spatially smoothed tensor.
-
-    """
-    N = T.ndim
-    modes = list(range(N))
-    sizes = T.shape
-    if mode is None:
-        mode = N
-    if mode == N:
-        if np.min(sizes) < L + 1:
-            raise ValueError('No. of subarrays too large')
-        J = [[np.hstack((np.zeros((sizes[m] - L + 1, ell)),
-                         np.eye(sizes[m] - L + 1),
-                         np.zeros((sizes[m] - L + 1, L - (ell + 1)))))
-              for m in modes] for ell in range(L)]
-        return np.stack([tmprod(T, j, modes) for j in J], axis=mode)
-    else:
-        modes.pop(mode)
-        if np.any([sizes[m] < L + 1 for m in modes]):
-            raise ValueError('No. of subarrays too large')
-    J = [[np.hstack((np.zeros((sizes[m] - L + 1, ell)),
-                     np.eye(sizes[m] - L + 1),
-                     np.zeros((sizes[m] - L + 1, L - (ell + 1)))))
-          for m in modes] for ell in range(L)]
-    return np.concatenate([tmprod(T, j, modes) for j in J], axis=mode)
 
 
 # %% R-D array processing
@@ -1409,6 +1355,28 @@ def estcore(T: np.ndarray,
 # %% Alternating Least Squares
 
 
+def als_upd(T: np.ndarray, F: list) -> tp.List[np.ndarray]:
+    """
+    Alternating Least Squares update
+
+    Parameters
+    ----------
+    T : NumPy array
+        Input tensor.
+    F : list
+        Estimated factor matrices.
+
+    Returns
+    -------
+    list
+        Updated estimated factor matrices.
+
+    """
+    for dim in range(T.ndim):
+        F[dim] = unfold(T, dim) @ la.pinv(kr(F[:dim] + F[(dim + 1):])).T
+    return F
+
+
 def als(T: np.ndarray, R: int,
         maxit: int = 1000,
         tol: float = 1e-3,
@@ -1425,7 +1393,7 @@ def als(T: np.ndarray, R: int,
     maxit : int, optional
         Maximum no. of iterations. The default is 1000.
     tol : float, optional
-        Tolerance for relative reconst. error. The default is 1e-3.
+        Reconstruction error tolarance. The default is 1e-3.
     F : list, optional
         Factor matrix initialization overrides. The default is None.
 
@@ -1435,18 +1403,15 @@ def als(T: np.ndarray, R: int,
         Estimated factor matrices.
 
     """
-    rel_rec_error = 1.0
+    reconst_error = 1.0
     iteration = 0
-    no_dim = T.ndim
-    T_frob = frob(T)
     if F is None:
         F = [np.random.randn(m, R) for m in T.shape]
-    while (rel_rec_error > tol) and (iteration < maxit):
+    while (reconst_error > tol) and (iteration < maxit):
         iteration += 1
-        for dim in range(no_dim):
-            F[dim] = unfold(T, dim) @ la.pinv(kr(F[:dim] + F[(dim + 1):])).T
-        rel_rec_error = frob(T - cpdgen(F)) / T_frob
-    return F, iteration, rel_rec_error
+        F = als_upd(T, F)
+        reconst_error = frob(T - cpdgen(F))
+    return F, iteration, reconst_error
 
 
 # %% Canonical Polyadic Decomposition
