@@ -41,9 +41,12 @@ Includes:
         Seq. Trunc. MLSVD (stmlsvd)
         Trunc. MLSVD (tmlsvd)
         Est. core tensor (estcore)
-    5. Canonical Polyadic Decomposition (CPD)
+    5. Alternating Least Squares (ALS)
+        ALS update (als_upd)
+        ALS (als)
+    6. Canonical Polyadic Decomposition (CPD)
         CPD via GEVD (cpdgevd)
-        CPD via GEVD2 (cpdgevd2)
+        CPD via symmetric GEVD2
         CPD via SVD/EVD (cpdsevd)
         LS Khatri-Rao factorization (lskrf)
 """
@@ -1515,6 +1518,12 @@ def cpdgevd2(T: np.ndarray, D: int,
     if normcols:  # normalize columns
         F = [colnorm(f) for f in F]
     return F
+
+
+def pigevd2(T: np.ndarray, R: int) -> list:
+    U, S = stmlsvd(T, (R, R, np.max((R, 2))))[:2]
+    L, R = la.eig(S[:, :, 0], S[:, :, 1], left=True)[1:]
+    return (U[0] @ L).T.conj(), (U[1].conj() @ R).T
 
 
 def lskrf(K: np.ndarray,

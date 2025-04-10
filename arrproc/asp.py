@@ -7,10 +7,14 @@ Array Signal Processing.
 
 Includes:
     0. Convenience functions
-        Random ranges (randges)
-    1. Basic operations
         Column normalization (colnorm)
+        Min/Max normalization (min_max)
+        Random ranges (randges)
+        Selection matrix generator (selM)
+        Triangular reconditioning (tri)
+    1. Basic operations
         Add noise to Rx matrix (noisy)
+        Estimate SNR (est_snr)
         Root mean square error (rmse)
         Least-Squares Khatri-Rao factorization (lskrf)
     2. Preprocessing
@@ -28,6 +32,7 @@ Includes:
     4. Beamforming
         Bartlett's beamformer (bartlett)
         Capon's beamformer (capon)
+        Miniumum variance distortionless response (mvdr)
         Linear predictor beamformer (linear_pred)
         Multiple signal classification (music)
         MUSIC polynomial roots (music_roots)
@@ -46,11 +51,16 @@ Includes:
 
 __all__ = [
     "colnorm",
+    "min_max",
+    "randges",
+    "selM",
+    "tri",
+    "colnorm",
     "noisy",
+    "est_snr",
     "rmse",
     "lskrf",
     "lra",
-    "selM",
     "fba",
     "sps",
     "desps",
@@ -58,6 +68,7 @@ __all__ = [
     "beamformer",
     "bartlett",
     "capon",
+    "mvdr",
     "linear_pred",
     "music",
     "music_roots",
@@ -84,6 +95,26 @@ from scipy.signal import find_peaks
 
 
 # %% Convenience functions
+
+def colnorm(X: np.ndarray) -> np.ndarray:
+    """
+    Column Normalization.
+
+    Parameters
+    ----------
+    X : NumPy array
+        Input matrix.
+
+    Returns
+    -------
+    NumPy array
+        Input matrix with normalized columns.
+
+    """
+    if X.ndim == 1:
+        return X / la.norm(X)
+    return X @ np.diag(1 / la.norm(X, axis=0))
+
 
 def min_max(power: np.ndarray,
             min_power: bool = True) -> np.ndarray:
@@ -146,27 +177,57 @@ def randges(R: int,
     return draw
 
 
-# %% Basic operations
-
-def colnorm(X: np.ndarray) -> np.ndarray:
+def selM(M: int, Msub: int, shift: int = 0) -> np.ndarray:
     """
-    Column Normalization.
+    Maximum overlap selection matrix.
 
     Parameters
     ----------
-    X : NumPy array
-        Input matrix.
+    M : int
+        Number of array elements.
+    Msub : int
+        Number of subarrays.
+    shift : int, optional
+        Selection array shift. The default is 0.
+        Maximum is M - Msub + 1 (the number of subarrays).
+
+    Raises
+    ------
+    SystemExit
+        Shift exceeds number of subarrays.
+
+    Returns
+    -------
+    None.
+
+    """
+    L = M - Msub + 1
+    if shift >= L:
+        raise SystemExit("Shift cannot exceed no. of subarrays.")
+    return np.hstack((np.zeros((Msub, shift)),
+                      np.eye(Msub),
+                      np.zeros((Msub, M - (Msub + shift)))))
+
+
+def tri(A: np.ndarray) -> np.ndarray:
+    """
+    Triangular (re)conditioning.
+
+    Parameters
+    ----------
+    A : NumPy array
+        Input (Hermitian) matrix.
 
     Returns
     -------
     NumPy array
-        Input matrix with normalized columns.
+        Reconditioned matrix.
 
     """
-    if X.ndim == 1:
-        return X / la.norm(X)
-    return X @ np.diag(1 / la.norm(X, axis=0))
+    return (A + A.conj().T) / 2
 
+
+# %% Basic operations
 
 def noisy(M: np.ndarray, SNR: float = 0.0) -> np.ndarray:
     """
@@ -193,6 +254,10 @@ def noisy(M: np.ndarray, SNR: float = 0.0) -> np.ndarray:
     N *= scale
     M = M + N
     return (M, N)
+
+
+def est_snr(X: np.ndarray, Xo: np.ndarray) -> float:
+    return 20 * np.log10(la.norm(Xo) / la.norm(X - Xo))
 
 
 def rmse(E: np.ndarray,
@@ -316,38 +381,6 @@ def lra(X: np.ndarray,
     return U[:, :R] @ np.diag(s[:R]) @ VH[:R]
 
 
-def selM(M: int, Msub: int, shift: int = 0) -> np.ndarray:
-    """
-    Maximum overlap selection matrix.
-
-    Parameters
-    ----------
-    M : int
-        Number of array elements.
-    Msub : int
-        Number of subarrays.
-    shift : int, optional
-        Selection array shift. The default is 0.
-        Maximum is M - Msub + 1 (the number of subarrays).
-
-    Raises
-    ------
-    SystemExit
-        Shift exceeds number of subarrays.
-
-    Returns
-    -------
-    None.
-
-    """
-    L = M - Msub + 1
-    if shift >= L:
-        raise SystemExit("Shift cannot exceed no. of subarrays.")
-    return np.hstack((np.zeros((Msub, shift)),
-                      np.eye(Msub),
-                      np.zeros((Msub, M - (Msub + shift)))))
-
-
 def fba(X: np.ndarray) -> np.ndarray:
     """
     Forward-backward averaging.
@@ -390,99 +423,67 @@ def sps(X: np.ndarray, L: int = 2) -> np.ndarray:
         Spatially smoothed input matrix.
 
     """
-    M = len(X)
+    M = X.shape[0]
     if L >= M:
         raise SystemExit("No. of subarrays cannot equal no. of elements")
-    J = [selM(M, M - L + 1, m) for m in range(L)]
-    return np.hstack([j @ X for j in J])
+    Ms = M - L + 1
+    row_slices = [slice(ell, Ms + ell) for ell in range(L)]
+    return np.hstack([X[row_slice] for row_slice in row_slices])
 
 
-def desps(X: np.ndarray, L: int = 2) -> np.ndarray:
+def desps(X_sps: np.ndarray, L: int = 2) -> np.ndarray:
     """
-    De-SPS: undo spatial smoothing.
-
-    Does not check for consistency.
+    Recover sample matrix from spatially smoothed samples
 
     Parameters
     ----------
     X : NumPy array
-        Spatially smoothed input matrix.
-    L : int, optional
-        Number of subarrays. Defaults to 2.
-
-    Raises
-    ------
-    SystemExit
-        If no. of samples / no. of subarrays is not a whole no.
-
-    Returns
-    -------
-    NumPy array
-        Original input data.
-
-    """
-    Msub, LN = X.shape
-    if np.mod(LN, L) == 0:
-        N = int(LN / L)
-        X_top = X[:, :N]
-        X_row = X[Msub - 1, N:]
-        return np.vstack((X_top, X_row.reshape((L - 1, N))))
-    else:
-        err_msg = "No. of samples must be a multiple of the no. of subarrays"
-        raise SystemExit(err_msg)
-
-
-def MuDe(X: np.ndarray, D: int, L: int = 2) -> np.ndarray:
-    """
-    Multiple Denoising.
-
-    Parameters
-    ----------
-    X : NumPy array
-        Input matrix.
-    D : int
-        Model order.
+        DESCRIPTION.
     L : int, optional
         Number of subarrays. The default is 2.
 
-    Raises
-    ------
-    SystemExit
-        If number of subarrays >= number of elements.
-
     Returns
     -------
     NumPy array
-        Processed matrix.
+        Sample matrix.
 
     """
-    M = len(X)
-    if L >= M:
-        raise SystemExit("No. of subarrays cannot equal no. of elements")
-    W = lra(X, D)
-    Y = sps(W, L)
-    Z = lra(Y, D)
-    return desps(Z, L)
+    N = X_sps.shape[1] // L
+    col_slices = [slice(ell * N, (ell + 1) * N) for ell in range(1, L)]
+    return np.vstack((X_sps[:, :N], *[X_sps[-1, col_slice][None, :]
+                                      for col_slice in col_slices]))
 
 
-# %% Recursive cov. est.
-
-def tri(A: np.ndarray) -> np.ndarray:
+def MuDe(X: np.ndarray, D: int, L: int | list = 1) -> np.ndarray:
     """
-    Triangular (re)conditioning.
+    Multiple Denoising
 
     Parameters
     ----------
-    A : NumPy array
-        Input (Hermitian) matrix.
+    X : np.ndarray
+        DESCRIPTION.
+    D : int
+        DESCRIPTION.
+    L : int | list, optional
+        DESCRIPTION. The default is 1.
 
     Returns
     -------
-    NumPy array
-        Reconditioned matrix.
+    X_MuDe : TYPE
+        DESCRIPTION.
 
     """
-    return (A + A.conj().T) / 2
+    X_MuDe = lra(X, D)
+    if L == 1:
+        return X_MuDe
+    for ell in L:
+        X_sps = sps(X_MuDe, ell)
+        X_lra = lra(X_sps)
+        X_MuDe = desps(X_lra, ell)
+    return X_MuDe
+
+
+# %% Recursive cov. est.
 
 
 def cov_upd(covariance: np.ndarray,
