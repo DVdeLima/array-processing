@@ -54,8 +54,8 @@ Includes:
 # %% __all__
 
 __all__ = [
-    "frob",
     "colnorm",
+    "outer_prod",
     "kron",
     "kr",
     "kron2kr",
@@ -69,7 +69,7 @@ __all__ = [
     "ll1gen",
     "estSNR",
     "noisy",
-    "lra",
+    "lmlra",
     "fba",
     "qunit",
     "unitransf",
@@ -109,33 +109,8 @@ from itertools import permutations
 # import pdb as ipdb
 # ipdb.set_trace()
 
+
 # %% Basic operations
-
-
-def frob(X: np.ndarray,
-         squared: bool = False) -> float:
-    """
-    Frobenius norm.
-
-    Parameters
-    ----------
-    X : NumPy array
-        Vector or matrix or tensor.
-    squared : bool, optional
-        Return squared Frobenius norm. The default is False.
-    axis : tp.Optional[int], optional
-        Axis along which the norm is calculated. The default is None.
-
-    Returns
-    -------
-    float
-        Frobenius norm.
-    """
-    frob2 = (X * X.conj()).real.sum()  # squared Frob. norm
-    if squared:
-        return frob2
-    return np.sqrt(frob2)
-
 
 def colnorm(X: np.ndarray) -> np.ndarray:
     """
@@ -164,7 +139,7 @@ def colnorm(X: np.ndarray) -> np.ndarray:
         return fold(colnorm(unfold(X, N-1)), N-1, [*X.shape])
 
 
-def oprod(F: list) -> np.ndarray:
+def outer_prod(F: list) -> np.ndarray:
     """
     Outer product.
 
@@ -262,7 +237,6 @@ def kron2kr(C: int) -> np.array:
     K = np.zeros((C ** 2, C))
     K[(range(0, C ** 2, C + 1), range(C))] = 1
     return K
-    # return np.eye(C ** 2)[::(C + 1)].T
 
 
 def unfold(T: np.ndarray,
@@ -563,25 +537,23 @@ def estSNR(X0: np.ndarray, X: np.ndarray) -> np.float64:
     return 20 * np.log10(la.norm(X0) / la.norm(X - X0))
 
 
-def noisy(T: np.ndarray,
-          SNR: float = 0.0) -> tp.Tuple[np.ndarray,
-                                        np.ndarray]:
+def noise(T: np.ndarray,
+          SNR: float = 0.0) -> np.ndarray:
     """
-    Generate AWGN noise for a tensor.
+    Generate AWGN noise tensor.
 
     Parameters
     ----------
     T : NumPy array
         Input tensor.
     SNR : float, optional
-        Signal-to-Noise Ratio. The default is 0.0.
+        Signal to noise ratio. The default is 0.0.
 
     Returns
     -------
-    T : NumPy array
-        Noisy tensor.
     N : NumPy array
         Noise tensor.
+
     """
     tensor_shape = T.shape
     if np.iscomplex(T).any():
@@ -591,8 +563,7 @@ def noisy(T: np.ndarray,
         N = np.random.randn(*tensor_shape)
     scale = la.norm(T) * (10 ** (-SNR / 20)) / la.norm(N)
     N *= scale
-    T = T + N
-    return T, N
+    return N
 
 
 def truncate(M: np.ndarray,
@@ -623,59 +594,15 @@ def truncate(M: np.ndarray,
         return M[:, :R]
     return M[:R]
 
+
 # %% Preprocessing
 
-
-def lra(X: np.ndarray,
-        R: tp.Union[int, list, None] = None,
-        useTMLSVD: bool = False) -> np.ndarray:
-    """
-    Low-Rank Approximation.
-
-    Parameters
-    ----------
-    X : NumPy array
-        Input tensor.
-    R : int, list, or NumPy array
-        Rank (int) or core size (list/array)
-    useTMLSVD : bool, optional
-        Use Truncated MLSVD instead of ST-MLSVD. The default is False.
-
-    Returns
-    -------
-    Low-rank approximated tensor.
-    """
-    N = X.ndim
-
-    if N == 2:
-        U, s, VH = la.svd(X, full_matrices=False)
-        if isinstance(R, (int, np.integer)):
-            U = U[:, :R]
-            S = np.diagonal(s[:R])
-            VH = VH[:R]
-        elif isinstance(R, list):
-            U = U[:, :R[0]]
-            S = np.diagonal(s[:min(R)])
-            VH = VH[:R[1]]
-        return U @ S @ VH
-    else:
-        if R is None:
-            size_core = None
-        elif isinstance(R, (int, np.integer)):
-            size_core = [np.min((R, m)) for m in X.shape]
-        else:
-            size_core = R
-
-        if useTMLSVD:
-            U = tmlsvd(X, size_core)[0]
-            S = estcore(X, U)
-        else:
-            U, S = stmlsvd(X, size_core)[:2]
-        return tmprod(S, U)
+def lmlra(T: np.ndarray, R: int | list) -> np.ndarray:
+    U, S = stmlsvd(T, R)[:2]
+    return tmprod(S, U)
 
 
-def fba(T: np.ndarray,
-        mode: int = None) -> np.ndarray:
+def fba(T: np.ndarray, mode: int = -1) -> np.ndarray:
     """
     Foward-backward averaging
 
@@ -695,12 +622,105 @@ def fba(T: np.ndarray,
 
     """
     N = T.ndim
-    EM = [np.fliplr(np.eye(m)) for m in T.shape]
-    if mode is None:
-        mode = N - 1
+    slices = [slice(None, None, -1)] * N
     if mode >= N:
-        return np.einsum("i... -> ...i", np.stack((T, tmprod(T.conj(), EM))))
-    return np.concatenate((T, tmprod(T.conj(), EM)), axis=mode)
+        return np.einsum("i... -> ...i", np.stack((T, T.conj()[*slices])))
+    return np.concatenate((T, T.conj()[*slices]), axis=mode)
+
+
+def sps(T: np.ndarray, L: int | list = None) -> np.ndarray:
+    """
+    Spatial smoothing.
+
+    Increases no. of samples using subarrays of the original data
+
+    Parameters
+    ----------
+    X : NumPy array
+        Input matrix.
+    L : int, optional
+        Number of subarrays. The default is 2.
+
+    Raises
+    ------
+    SystemExit
+        If number of subarrays >= the number of elements.
+
+    Returns
+    -------
+    NumPy array
+        Spatially smoothed input matrix.
+
+    """
+    M = list(T.shape)
+    N = T.ndim
+    if L is None:
+        L = [2] * N
+    T_sps = T.copy()
+    for n, ell in enumerate(L):
+        if ell > 1:
+            Ms = M[n] - ell + 1
+            M[n] = Ms
+            M[-1] = ell * M[-1]
+            row_slices = [slice(eel, Ms + eel) for eel in range(ell)]
+            T_sps = fold(np.hstack([unfold(T_sps, n)[row_slice]
+                                    for row_slice
+                                    in row_slices]), n, M)
+    return T_sps
+
+
+def desps(T_sps: np.ndarray, L: int | list = None) -> np.ndarray:
+    """
+    Recover sample tensor from spatially smoothed samples
+
+    Parameters
+    ----------
+    T : NumPy array
+        Spatially smoothed tensor.
+    L : int, list, optional
+        Number of subarrays. The default is 2.
+
+    Returns
+    -------
+    NumPy array
+        Sample matrix.
+
+    """
+    N = T_sps.ndim
+    # modes = np.arange(N - 2, -1, -1)
+    N = T_sps.shape[1] // L
+    col_slices = [slice(ell * N, (ell + 1) * N) for ell in range(1, L)]
+    return np.vstack((T_sps[:, :N], *[T_sps[-1, col_slice][None, :]
+                                      for col_slice in col_slices]))
+
+
+def MuDe(X: np.ndarray, D: int, L: int | list = 2) -> np.ndarray:
+    """
+    Multiple Denoising
+
+    Parameters
+    ----------
+    X : NumPy array
+        Input tensor.
+    D : int
+        Model order.
+    L : int | list, optional
+        No of subarrays. The default is 2.
+
+    Returns
+    -------
+    X_MuDe : NumPy array
+        Multiply denoised.
+
+    """
+    X_MuDe = lmlra(X, D)
+    if L == 1:
+        return X_MuDe
+    for ell in L:
+        X_sps = sps(X_MuDe, ell)
+        X_lra = lmlra(X_sps)
+        X_MuDe = desps(X_lra, ell)
+    return X_MuDe
 
 
 def qunit(M: int) -> np.ndarray:
@@ -717,7 +737,7 @@ def qunit(M: int) -> np.ndarray:
     NumPy array
         Unitary transform matrix.
     """
-    m = np.floor(M / 2).astype(int)
+    m = M // 2
     n = np.mod(M, 2)
     Im = np.eye(m)
     PIm = np.fliplr(Im)
@@ -734,7 +754,7 @@ def qunit(M: int) -> np.ndarray:
     return Q
 
 
-def unitransf(X: np.ndarray, exp: bool = False) -> tp.Tuple[np.ndarray,
+def unitransf(X: np.ndarray, mode: int = -1) -> tp.Tuple[np.ndarray,
                                                             np.ndarray]:
     """
     Unitary transformation.
@@ -751,7 +771,7 @@ def unitransf(X: np.ndarray, exp: bool = False) -> tp.Tuple[np.ndarray,
         Forward-backward averaged matrix.
         Unitary transform residual matrix.
     """
-    Y = fba(X, exp)
+    Y = fba(X, mode)
     QH = [qunit(m).conj().T for m in Y.shape]
     Z = tmprod(Y, QH)
 
@@ -1055,7 +1075,7 @@ def ute(X: np.ndarray,
 
     Parameters
     ----------
-    X : np.ndarray
+    X : NumPy array
         Input tensor.
     D : int
         Model order.
@@ -1413,7 +1433,7 @@ def als(T: np.ndarray, R: int,
     while (reconst_error > tol) and (iteration < maxit):
         iteration += 1
         F = als_upd(T, F)
-        reconst_error = frob(T - cpdgen(F))
+        reconst_error = la.norm(T - cpdgen(F))
     return F, iteration, reconst_error
 
 
