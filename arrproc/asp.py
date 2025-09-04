@@ -139,9 +139,7 @@ def min_max(power: np.ndarray,
     return (power - max_power) / diff
 
 
-def randges(R: int,
-            start: float = -90.0,
-            end: float = 90.0,
+def randges(R: int, start_end: tuple = (-np.pi / 2, np.pi / 2),
             biased: float = 3.0) -> np.ndarray:
     """
     Draw from random ranges for DoA estimation
@@ -150,11 +148,9 @@ def randges(R: int,
     ----------
     R : int
         Number of ranges (R > 1).
-    start : float, optional
-        Start of distribution. The default is -90.0.
-    end : float, optional
-        End of distribution. The default is 90.0.
-    biased : float, optional
+    start_end : tuple
+        Minimum and maximum angle. The default is (-π/2, +π/2).
+    bias : float, optional
         Number of standard deviations in each half
         range for Normal distribution draw. If set
         to 0 or False uses Uniform distribution.
@@ -166,7 +162,9 @@ def randges(R: int,
         Draw.
 
     """
-    delta = abs(start - end) / R
+    start = start_end[0]
+    end = start_end[1]
+    delta = np.diff(start_end) / R
     draw = start + delta * np.arange(R)
     if biased:
         draw += delta * (1 + np.random.randn(R) / biased) / 2
@@ -330,7 +328,7 @@ def vkrf(k: np.ndarray,
 
     Parameters
     ----------
-    k : np.ndarray
+    k : NumPy array
         Khatri-Rao product vector.
     M : tp.Union[int, list]
         Vector length.
@@ -365,7 +363,7 @@ def lra(X: np.ndarray,
 
     Parameters
     ----------
-    X : np.ndarray
+    X : NumPy array
         Input matrix.
     R : int
         Rank.
@@ -460,17 +458,17 @@ def MuDe(X: np.ndarray, D: int, L: int | list = 1) -> np.ndarray:
 
     Parameters
     ----------
-    X : np.ndarray
-        DESCRIPTION.
+    X : NumPy array
+        Input matrix.
     D : int
-        DESCRIPTION.
+        Model order.
     L : int | list, optional
-        DESCRIPTION. The default is 1.
+        No of subarrays. The default is 1.
 
     Returns
     -------
-    X_MuDe : TYPE
-        DESCRIPTION.
+    X_MuDe : NumPy array
+        Multiply denoised matrix.
 
     """
     X_MuDe = lra(X, D)
@@ -1095,7 +1093,7 @@ def mdl(X: np.ndarray,
 
     Parameters
     ----------
-    X : np.ndarray
+    X : NumPy array
         Observation matrix.
     fba : bool, optional. Default is False
         If foward-backward averaging has been applied
@@ -1148,7 +1146,7 @@ def aic(X: np.ndarray,
 
     Parameters
     ----------
-    X : np.ndarray
+    X : NumPy array
         Observation matrix.
     fba : bool, optional. Default is False
         If foward-backward averaging has been applied
@@ -1205,7 +1203,7 @@ def eft(X: np.ndarray,
 
     Parameters
     ----------
-    X : np.ndarray
+    X : NumPy array
         Observation matrix.
     tol : float, optional
         Tolerance. The default is 1e-2.

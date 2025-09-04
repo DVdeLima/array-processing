@@ -29,8 +29,8 @@ __all__ = [
 # %% Dependencies
 
 import typing as tp
-from numpy import arange, exp, ndarray, pi, sign, sqrt
-
+from numpy import angle, arange, exp, ndarray, pi, sign, sqrt, stack
+from sklearn.cluster import KMeans
 
 # %% Alphabet
 
@@ -66,6 +66,10 @@ def modulator(binary_sequence: tp.Union[list, ndarray],
 
 def demodulator(signals: tp.Union[list, ndarray],
                 constellation: ndarray = alphabet) -> ndarray:
+    pass
+
+
+def phase_shift_estimator(signals: ndarray) -> ndarray:
     pass
 
 

@@ -68,7 +68,7 @@ __all__ = [
     "eyeNL",
     "ll1gen",
     "estSNR",
-    "noisy",
+    "noise",
     "lmlra",
     "fba",
     "qunit",
@@ -239,91 +239,82 @@ def kron2kr(C: int) -> np.array:
     return K
 
 
+def right_modes_calc(no_dimensions: int | np.int_,
+                     modes_left: int | list | tuple | np.ndarray) -> tuple:
+    match modes_left:
+        case int() | np.int_():
+            modes_right = np.hstack((np.arange(modes_left + 1,
+                                               no_dimensions),
+                                     np.arange(modes_left)))
+        case list() | tuple() | np.ndarray():
+            modes_right = np.delete(np.arange(no_dimensions), modes_left)
+        case _:
+            raise TypeError("Unsupported type!")
+    return modes_right
+
+
 def unfold(T: np.ndarray,
-           modes_left: tp.Union[int, list] = 0,
-           modes_right: tp.Optional[list] = None):
+           modes_left: int | list | tuple | np.ndarray,
+           modes_right: int | list | tuple | np.ndarray = None) -> np.ndarray:
     """
-    Returns mode-unfolding of tensor.
+    Tensor unfolding
 
     Parameters
     ----------
     T : NumPy array
         Tensor.
-    mode : int, list, optional
-        Unfolding mode. The default is 0 (first mode).
+    modes_left : int | list | tuple | NumPy array
+        Left mode unfolding index(es).
+    modes_right : int | list | tuple | NumPy array, optional
+        Right mode unfolding index(es). The default is None.
+
+    Raises
+    ------
+    TypeError
+        If modes_left is not int, list, tuple, or NumPy array.
 
     Returns
     -------
     NumPy array
-        mode-unfolded tensor.
+        Unfolded tensor.
+
     """
-    modes_left_is_int = isinstance(modes_left, (int, np.integer))
-    modes_right_is_none = modes_right is None
-    if modes_left_is_int and modes_right_is_none:
-        tensor_shape = list(T.shape)
-        matrix_shape = [tensor_shape.pop(modes_left),
-                        np.array(tensor_shape).prod()]
-        if modes_left:
-            N = T.ndim
-            axis_order = list(range(N))
-            axis_order = [axis_order.pop(modes_left), *axis_order]
-            T = np.einsum(T, range(N), axis_order)
-        return np.reshape(T, matrix_shape)
-    else:  # arbitrary unfolding, undocumented
-        N = T.ndim
-        if modes_left_is_int:
-            modes_left = [modes_left]
-        if modes_right_is_none:
-            modes_right = [n for n in range(N) if n not in modes_left]
-        elif isinstance(modes_right, int):
-            modes_right = [modes_right]
-        tensor_shape = list(T.shape)
-        matrix_shape = [np.prod([tensor_shape[m] for m in modes_left]),
-                        np.prod([tensor_shape[m] for m in modes_right])]
-        return np.einsum(T, range(N),
-                         modes_left + modes_right).reshape(matrix_shape)
+    no_dimensions = T.ndim
+    tensor_shape = T.shape
+    if modes_right is None:
+        modes_right = right_modes_calc(no_dimensions, modes_left)
+    matrix_rows = np.array(tensor_shape)[np.array(modes_left)].prod()
+    matrix_cols = np.array(tensor_shape)[np.array(modes_right)].prod()
+    return np.reshape(np.einsum(T, range(no_dimensions),
+                                np.hstack((modes_left, modes_right))),
+                      (matrix_rows, matrix_cols))
 
 
 def fold(M: np.ndarray,
-         modes: tp.Union[int, list],
-         tensor_shape: list) -> np.ndarray:
+         tensor_shape: list | tuple | np.ndarray,
+         modes: int | list | tuple | np.ndarray = None) -> np.ndarray:
     """
-    Fold unfolded tensor back into tensor.
+    Fold unfolded (matricized) tensor back into tensor.
 
     Parameters
     ----------
     M : NumPy array
-        Unfolded tensor (matrix).
-    mode : int
-        Mode (from unfolding).
-    shape : list
-        Tensor shape (size of each dimension).
-
+        Unfolded (matricized) tensor.
+    tensor_shape : list | tuple | NumPy array
+        Tensor shape
+    modes : int | list | tuple | NumPy array, optional
+        Mode order. The default is None.
     Returns
     -------
     NumPy array.
         Tensor
+
     """
-    N = len(tensor_shape)
-    if isinstance(modes, int):
-        if modes:
-            axis_order = list(range(N))
-        else:
-            return np.reshape(M, tensor_shape)
-        axis_order = [axis_order.pop(modes)] + axis_order
-        moved_shape = [tensor_shape[ax] for ax in axis_order]
-        return np.einsum(np.reshape(M, moved_shape), axis_order, range(N))
-    else:  # arbitrary mode folding, undocumented
-        all_modes = range(N)
-        if np.all([isinstance(m, int) for m in modes]):
-            modes_left = modes
-            modes_right = [n for n in all_modes if n not in modes_left]
-        elif np.any(intput := [isinstance(m, int) for m in modes]):
-            modes_left, modes_right = [[m] if iu else m
-                                       for m, iu in zip(modes, intput)]
-        axis_order = modes_left + modes_right
-        moved_shape = [tensor_shape[ax] for ax in axis_order]
-        return np.einsum(M.reshape(moved_shape), axis_order, all_modes)
+    if modes is None:
+        modes = list(range(len(tensor_shape)))
+    return np.einsum(np.reshape(M, [tensor_shape[mode]
+                                    for mode in modes]),
+                     modes, range(len(tensor_shape)))
 
 
 def tmprod(T: np.ndarray,
@@ -348,10 +339,10 @@ def tmprod(T: np.ndarray,
     """
     N = T.ndim
     if modes is None:
-        if isinstance(M, list):
-            modes = range(len(M))
-        else:
+        if isinstance(M, np.ndarray):
             modes = 0
+        else:
+            modes = range(len(M))
     if isinstance(M, np.ndarray):
         M = [M]
     if isinstance(modes, (int, np.integer)):
@@ -755,7 +746,7 @@ def qunit(M: int) -> np.ndarray:
 
 
 def unitransf(X: np.ndarray, mode: int = -1) -> tp.Tuple[np.ndarray,
-                                                            np.ndarray]:
+                                                         np.ndarray]:
     """
     Unitary transformation.
 
@@ -1396,7 +1387,7 @@ def als_upd(T: np.ndarray, F: list) -> tp.List[np.ndarray]:
 
     """
     for dim in range(T.ndim):
-        F[dim] = unfold(T, dim) @ la.pinv(kr(F[:dim] + F[(dim + 1):])).T
+        F[dim] = unfold(T, dim) @ la.pinv(kr(F[(dim + 1):] + F[:dim])).T
     return F
 
 
